@@ -28,6 +28,33 @@
 // Functions here do NOT silently skip NaN. A NaN in the input produces a NaN in
 // the output, because quietly dropping values changes the denominator and the
 // caller is rarely told. Use [DropNaN] when that is what you mean.
+//
+// # Is it real?
+//
+// A correlation or a slope is an effect size: how strong a relationship looks,
+// not how likely it is to be there at all. Two independent random series of
+// four points clear |r| >= 0.5 about half the time by luck; at twenty points
+// it is about 2.5%. So the effect sizes here come with their evidence:
+//
+//	c, ok := stats.Correlate(a, b)                  // r, n and the two-sided p-value
+//	t := stats.Trend(y)                             // OLS slope, standard error, t and p
+//	q, keep := stats.BenjaminiHochberg(ps, 0.05)    // across a whole family of tests
+//
+// [Correlate] refuses (ok=false) below [MinCorrelationSamples] aligned points,
+// where a bare r misleads more than it informs. Testing many pairs at once
+// compounds a per-test 5% error rate, so [Adjust] applies Benjamini–Hochberg,
+// which controls the expected share of false findings among those kept. Every
+// "not enough evidence" case returns p = 1, never 0 or NaN, so a caller that
+// forgets to check still does the conservative thing.
+//
+// These are tests against zero (no correlation, no slope) under the usual
+// Pearson and OLS assumptions, including independent observations. Two series
+// that both trend will correlate whether or not they are related: detrend
+// before you Correlate them. Nothing here tests causation. The Student-t tail
+// comes from the regularised incomplete beta function (the standard library
+// has no t-distribution), pinned by the tests to published critical values
+// and to reference values within a relative error of 1e-9.
+
 package stats
 
 import (
