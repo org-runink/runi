@@ -1,0 +1,311 @@
+\documentclass[10pt,twocolumn]{article}
+\usepackage[margin=0.75in]{geometry}
+\usepackage{amsmath,amssymb}
+\usepackage{booktabs}
+\usepackage{listings}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\hypersetup{colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue}
+
+\lstset{
+  basicstyle=\ttfamily\footnotesize,
+  breaklines=true,
+  frame=single,
+  framesep=3pt,
+  columns=fullflexible,
+  keywordstyle=\color{blue!60!black},
+  commentstyle=\color{gray},
+  language=Go,
+}
+
+\title{\textbf{Measured Primitives}\\[2pt]
+\large Three Zero-Dependency Go Packages for Forecasting,\\Memoization and Deferred Evaluation}
+
+\author{Daniel Paes\\\small Runink\\\small\texttt{github.com/org-runink/runi}}
+\date{\today}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We present \texttt{stdx}, three small Go packages built under a single
+constraint: no dependencies outside the standard library. The constraint is not
+aesthetic. It is what makes the packages usable in a CLI, a sidecar, a WASM
+target or a device build, and it forces every numerical and concurrency decision
+to be made explicitly rather than delegated.
+
+We make three claims and support each with a reproducible measurement. First,
+that an ARIMAX implementation should \emph{refuse} to forecast without the future
+values of its exogenous regressors, rather than silently assuming zero or holding
+the last value flat as implementations commonly do; and that its prediction
+intervals should be validated empirically rather than merely derived---ours
+achieve $97.4\%$ coverage at a nominal $95\%$ level over $1{,}800$ held-out
+points. Second, that single-flight coalescing belongs \emph{inside} a memoization
+cache rather than beside it, because sequential repeats and concurrent duplicates
+are disjoint populations: our hit path costs $14.34$\,ns with zero allocations,
+and $64$ concurrent callers on a cold key cost one execution. Third, that lazy
+evaluation should separate \emph{whether} work happens from \emph{when} it
+starts; speculative start reduces a forced-value latency from $122$\,ms to
+$8\,\mu$s without sacrificing the property that an unforced value is never
+computed.
+
+We also report what we did not measure, and one negative result: in our own
+deployment, redundant computation was reduced substantially more by declining to
+invoke an expensive model than by replaying its prior answers, which suggests
+memoization and avoidance are complementary rather than competing strategies.
+\end{abstract}
+
+\section{Introduction}
+
+Three recurring costs motivate this work: forecasting a quantity that is driven
+by external factors, repeating a computation whose inputs have not changed, and
+paying latency for a value that could have been computed earlier. Each has a
+textbook answer. In practice each textbook answer is implemented in a way that
+fails quietly.
+
+An ARIMAX implementation that is asked to forecast without future regressor
+values will often proceed anyway. A cache helps the second caller while the
+first $N$ arrive together and each pays full cost. A lazy value defers work
+until it is forced, and then the forcing caller waits for all of it.
+
+The packages described here are small---under $1{,}500$ lines of
+non-test Go in total---and the contribution is not algorithmic novelty. Every
+method used predates 1980. The contribution is that each failure mode above is
+treated as a design requirement and each claim is attached to a test that fails
+when the claim stops being true.
+
+\section{Design constraint: no dependencies}
+
+\texttt{go.mod} declares no requirements. This is verified in CI by
+\texttt{go list -deps}.
+
+The cost is that Householder QR, Nelder--Mead, the Durbin--Levinson recursion
+and an inverse normal CDF are implemented rather than imported; each is a few
+dozen lines and each is covered by a known-answer test. The benefit is
+deployability and, less obviously, that every numerical choice had to be made and
+can therefore be documented.
+
+\section{\texttt{arimax}: forecasting with external drivers}
+
+ARIMA models a series by its own past. ARIMAX adds exogenous regressors:
+\begin{equation}
+Y_t = c + \sum_{i=1}^{p}\phi_i Y_{t-i} + \sum_{j=1}^{q}\theta_j \varepsilon_{t-j}
+      + \sum_{k=1}^{r}\beta_k X_{t,k} + \varepsilon_t
+\end{equation}
+
+\subsection{Staged estimation}
+
+We fit by the regression-with-ARIMA-errors formulation rather than a joint
+likelihood: ordinary least squares for $\beta$, then an ARMA fit to the
+regression errors $n_t = Y_t - \beta'X_t - c$. The two are equivalent in what they
+express; the staged form is better conditioned and each stage is separately
+testable.
+
+Least squares uses Householder QR rather than the normal equations. Exogenous
+regressors in applied settings are routinely near-collinear---advertising spend
+across channels, say---and forming $X'X$ squares the condition number.
+
+ARMA parameters minimise the conditional sum of squares by Nelder--Mead. CSS
+conditions on the first $p$ observations rather than running a Kalman filter for
+the exact likelihood. We state this rather than implying maximum likelihood.
+
+\subsection{Forecasting requires future $X$}
+
+A forecast $h$ steps ahead requires $X_{t+1},\dots,X_{t+h}$. Our API takes them
+as an argument and returns an error when they are absent.
+
+\begin{lstlisting}
+point, lo, hi, err := m.Forecast(12, xFuture, 0.05)
+// err if xFuture is nil or mis-sized
+\end{lstlisting}
+
+Where $X$ is known in advance---committed spend, a published timetable---this is
+the model at its best. Where $X$ is itself forecast, its error propagates and the
+intervals below \emph{understate} the true uncertainty because they condition on
+$X$ being correct. We document this rather than leaving it to be discovered.
+
+\subsection{Results}
+
+Parameters are recovered from $200$ independent synthetic series with AR(1)
+errors and one regressor, $n=500$. Synthetic data is used deliberately: bias
+cannot be measured without knowing the truth.
+
+\begin{table}[h]\centering\small
+\begin{tabular}{lrrr}
+\toprule
+Parameter & true & bias & RMSE \\
+\midrule
+exogenous $\beta$ & 2.50 & $-0.0005$ & 0.0087 \\
+AR(1) $\phi$      & 0.60 & $-0.0079$ & 0.0420 \\
+\bottomrule
+\end{tabular}
+\caption{Parameter recovery. $\beta$ is recovered essentially unbiased despite
+strongly serially correlated errors, which is the purpose of the staged fit. The
+small negative bias in $\phi$ is the known finite-sample bias of CSS estimation
+and is not corrected.}
+\end{table}
+
+\noindent\textbf{Interval coverage.} Over $300$ series and $1{,}800$ held-out
+forecast points at horizons $1..6$, nominal $95\%$ prediction intervals contained
+the realised value $97.4\%$ of the time.
+
+An interval that is never validated is decoration. One that claims $95\%$ and
+delivers $70\%$ is worse than none, because it invites confident wrong answers.
+Our intervals are mildly \emph{conservative}, which is the safe direction; the
+gap arises because they assume known parameters and omit estimation error, while
+the CSS residual variance is slightly inflated in finite samples.
+
+\noindent\textbf{Against a naive baseline.} Over $100$ held-out windows at
+$h{=}6$, mean RMSE was $0.6188$ versus $3.4424$ for last-value carry-forward,
+$82.0\%$ lower. We report this as a floor rather than an achievement: a
+forecaster that cannot beat ``tomorrow equals today'' is not earning its
+complexity.
+
+\section{\texttt{memo}: memoization with single-flight}
+
+\subsection{Why coalescing belongs inside the cache}
+
+A cache serves the second caller. The characteristic production failure is
+different: $N$ callers arrive concurrently on a cold key, all miss, and all
+execute. Sequential repeats and concurrent duplicates are disjoint populations
+and neither mechanism covers the other, so we implement both in one type.
+
+\subsection{Errors are coalesced but not stored}
+
+A failed call is shared with everyone waiting on it, and is \emph{not} cached.
+Caching a failure converts a transient fault into a sticky one for the whole TTL;
+in our experience this is the most common way a memoization cache makes a system
+worse rather than better. A stampede against a failing dependency still produces
+one call rather than $N$.
+
+\subsection{Key canonicalisation}
+
+The difficult part of exact-match caching is deciding that two requests are the
+same request. Go randomises map iteration order, so hashing a map naively yields
+a different key on every run---a cache that never hits and never reports why. Our
+\texttt{Hash} sorts map keys, type-tags every value so that \texttt{"1"}, \texttt{1}
+and \texttt{true} differ, length-prefixes variable-length data so that
+$\{\texttt{"ab"},\texttt{"c"}\}$ and $\{\texttt{"a"},\texttt{"bc"}\}$ cannot
+collide, and canonicalises NaN and $-0.0$.
+
+\subsection{Results}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{lrrr}
+\toprule
+Operation & ns/op & B/op & allocs \\
+\midrule
+hit                       & 14.34 & 0 & 0 \\
+miss (store + LRU insert) & 694.2 & 358 & 5 \\
+hit, 16 threads           & 134.9 & 9 & 0 \\
+\texttt{Hash}, 4-field map & 1579 & 656 & 36 \\
+stampede, 64 cold callers & 24{,}324 & 4136 & 75 \\
+\bottomrule
+\end{tabular}
+\caption{The hit path allocates nothing. The parallel figure is $9\times$ the
+single-threaded one: \texttt{Store} takes one mutex per operation. We report this
+rather than omit it---at roughly 7M hits/s aggregate it is irrelevant for network
+or model calls, and disqualifying for sub-microsecond work.}
+\end{table}
+
+\section{\texttt{lazy}: deferred values that can start early}
+
+Laziness decides \emph{whether} work happens. Starting decides \emph{when}. Most
+lazy types conflate the two, so the caller who forces a value pays its full cost.
+We separate them: \texttt{Start} begins evaluation in the background without
+forcing, and an unforced value is still never computed.
+
+\begin{lstlisting}
+v := lazy.New(build)
+v.Start(ctx)         // returns immediately
+...                  // other work
+r, err := v.Get(ctx) // already resolved
+\end{lstlisting}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{lr}
+\toprule
+Measurement & \\
+\midrule
+\texttt{Get} on a cold value & 122\,ms \\
+\texttt{Get} after \texttt{Start} completed & $8\,\mu$s \\
+\texttt{All} over five 80\,ms values & 81\,ms \\
+\quad (serial equivalent) & 400\,ms \\
+\texttt{Get} on a resolved value & 73.91\,ns \\
+\bottomrule
+\end{tabular}
+\caption{Speculative start removes the forcing caller's wait almost entirely.}
+\end{table}
+
+A panic inside the function is recovered and returned to every caller as an error
+wrapping \texttt{ErrPanic}. Which goroutine happens to be forcing a shared value
+is a scheduling accident, so allowing a panic to propagate would make the crash
+site arbitrary.
+
+\section{A negative result}
+
+We audited our own production deployment for memoization and found none. What the
+system had instead was avoidance: single-flight coalescing at admission, durable
+idempotency for mutating replays, and a cascade of calibrated tree-based decisions
+that defer to an expensive model only when uncertain.
+
+Redundant computation was reduced substantially more by \emph{not invoking} the
+model than by replaying its answers. This is not an argument against memoization.
+It is evidence that the two are complementary and cover different cases:
+coalescing addresses concurrent duplicates, cascades address cheaply-answerable
+questions, and memoization addresses the sequential repeat that neither reaches.
+A system optimised only for replay leaves the first two on the table, and one
+optimised only for avoidance leaves the third.
+
+\section{Threats to validity}
+
+\textbf{No comparison against other libraries.} We report only our own
+measurements. No claim of superiority over any alternative is made, because no
+such experiment was run.
+
+\textbf{Accuracy is measured on synthetic data.} This is the only way to measure
+estimator bias, since it requires knowing the truth. It is not evidence of
+accuracy on real series, where the model is misspecified by construction.
+
+\textbf{Single machine.} All figures are from one developer laptop
+(AMD Ryzen 7 8840U, Linux, \texttt{amd64}) with no core pinning. They indicate
+shape---linear growth, allocation counts---not capacity.
+
+\textbf{CSS is not maximum likelihood.} The two agree closely at the series
+lengths benchmarked, but they are different estimators.
+
+\textbf{Gaussian errors are assumed} by the prediction intervals; heavy-tailed
+residuals will produce intervals that are too narrow in the tails.
+
+\section{Related work}
+
+Box and Jenkins~\cite{boxjenkins} established the ARIMA family; Hyndman and
+Athanasopoulos~\cite{hyndman} give the practical treatment of regression with
+ARIMA errors that we follow. Robertson et al.~\cite{bm25} introduced BM25, which
+we use elsewhere in our retrieval stack but not in these packages. Recent work on
+agentic search argues that unbounded corpus interaction does not scale and that
+bounded retrieval remains necessary~\cite{rise}; we note it because it bears on
+how systems built on these primitives should retrieve, not because these packages
+implement it.
+
+Memoization and single-flight are classical. Our contribution is their
+combination with explicit error semantics and canonical key derivation, together
+with the measurements above.
+
+\section{Availability}
+
+\texttt{github.com/org-runink/runi}, BSD-3-Clause. Every figure reproduces with
+\texttt{go test -bench . -benchmem}. Statement coverage is $87.0\%$
+(\texttt{arimax}), $82.4\%$ (\texttt{memo}) and $93.1\%$ (\texttt{lazy}).
+
+\begin{thebibliography}{9}
+\bibitem{boxjenkins} G.~E.~P. Box and G.~M. Jenkins. \emph{Time Series Analysis:
+Forecasting and Control}. Holden-Day, 1970.
+\bibitem{hyndman} R.~J. Hyndman and G. Athanasopoulos. \emph{Forecasting:
+Principles and Practice}, 2nd ed. OTexts, 2018.
+\bibitem{bm25} S.~E. Robertson et al. Okapi at TREC-3. \emph{TREC}, 1994.
+\bibitem{rise} Zhuang, Ni, Fun, Lin and Ma. Towards Retrieving Interaction Spaces
+for Agentic Search. arXiv:2606.06880, 2026.
+\end{thebibliography}
+
+\end{document}
