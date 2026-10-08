@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-8-informational" alt="eight packages">
+  <img src="https://img.shields.io/badge/packages-9-informational" alt="nine packages">
   <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -49,6 +49,7 @@ go get github.com/org-runink/runi
 | [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 79.1% |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
+| [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -82,6 +83,7 @@ you are still the one doing the work.
 | 📦 **the pack** | [`avro`](#runiavro--apache-avro-without-the-dependency-tree) | Carry it somewhere else, in a format other tools already read |
 | 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
+| ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -461,6 +463,40 @@ Panics become an error wrapping `ErrPanic` rather than crashing whichever
 goroutine happened to be forcing the value.
 
 ---
+
+## `runi/budget` — one deadline, shared honestly
+
+A request that must answer in three minutes usually collects a timeout per
+step: two minutes here, ninety seconds there. Each is defensible, nothing adds
+them up, and the slow step early on eats the time the answer needed.
+
+```go
+b, _ := budget.New(plan, nil)          // one deadline for the whole request
+ctx, cancel, ok := b.Begin(parent, "search")
+if ok {                                 // false: too little time left to bother
+	err := search(ctx)                  // ctx expires when search's slice does
+	cancel()
+	b.End(ctx, "search", err)           // done, failed or overrun
+}
+for _, r := range b.Finalize() {        // the answer says what it is missing
+	log.Printf("%s %s after %v", r.Phase.Name, r.Status, r.Elapsed)
+}
+```
+
+Each phase's slice is worked out when it starts, from what is left:
+`min(cap, remaining − margin − floors of later stages)`. Give the phase that
+writes the answer a floor, and no earlier phase can take that time. Phases in
+the same stage run side by side and hold nothing back for each other. A slice
+too small to be worth starting is recorded as **skipped** rather than started
+into a certain overrun.
+
+**It does not schedule and it does not stop work.** It never runs, orders or
+retries your phases. A slice is a context deadline, and a phase that ignores
+its context keeps running: `Finalize` calls that an overrun, which is true,
+but stopping the goroutine is up to you. The caps are a plan, not a
+measurement. `Plan.CriticalPath` tells you whether the plan fits the deadline
+with every phase at its cap. Whether the phases fit their caps is something to
+measure on the hardware that runs them.
 
 ---
 
