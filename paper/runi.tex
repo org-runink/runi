@@ -49,10 +49,10 @@ starts; speculative start reduces a forced-value latency from $122$\,ms to
 $8\,\mu$s without sacrificing the property that an unforced value is never
 computed.
 
-We also report what we did not measure, and one negative result: in our own
-deployment, redundant computation was reduced substantially more by declining to
-invoke an expensive model than by replaying its prior answers, which suggests
-memoization and avoidance are complementary rather than competing strategies.
+We also report what we did not measure, and we are explicit about the scope of a
+cache: memoization addresses the sequential repeat, and leaves the concurrent
+duplicate to coalescing. That is why single-flight is built into \texttt{memo}
+rather than layered over it.
 \end{abstract}
 
 \section{Introduction}
@@ -162,6 +162,7 @@ forecaster that cannot beat ``tomorrow equals today'' is not earning its
 complexity.
 
 \section{\texttt{memo}: memoization with single-flight}
+\label{sec:memo}
 
 \subsection{Why coalescing belongs inside the cache}
 
@@ -242,20 +243,25 @@ wrapping \texttt{ErrPanic}. Which goroutine happens to be forcing a shared value
 is a scheduling accident, so allowing a panic to propagate would make the crash
 site arbitrary.
 
-\section{A negative result}
+\section{What a cache does not cover}
 
-We audited our own production deployment for memoization and found none. What the
-system had instead was avoidance: single-flight coalescing at admission, durable
-idempotency for mutating replays, and a cascade of calibrated tree-based decisions
-that defer to an expensive model only when uncertain.
+Repeated expensive work has more than one shape, and a memoization cache
+addresses only one of them. It is worth stating which, because a cache is often
+reached for when a different mechanism is the one that fits.
 
-Redundant computation was reduced substantially more by \emph{not invoking} the
-model than by replaying its answers. This is not an argument against memoization.
-It is evidence that the two are complementary and cover different cases:
-coalescing addresses concurrent duplicates, cascades address cheaply-answerable
-questions, and memoization addresses the sequential repeat that neither reaches.
-A system optimised only for replay leaves the first two on the table, and one
-optimised only for avoidance leaves the third.
+A cache addresses the \emph{sequential} repeat: the same question asked again,
+minutes or hours later, after the first answer has been computed and stored. It
+does nothing for the \emph{concurrent} duplicate, where $n$ callers ask the same
+unanswered question at once and a plain cache admits all $n$ --- which is why
+\texttt{memo} builds single-flight in rather than leaving it to the caller
+(Section~\ref{sec:memo}). And it does nothing for a request that need not have
+been expensive in the first place: work avoided is cheaper than work replayed,
+and no cache can avoid work it is only ever shown the results of.
+
+We make no claim here about the relative size of those three effects in any
+particular system. That depends entirely on the workload, we have not measured
+it in a form we could publish, and a number without its workload would be
+decoration.
 
 \section{Threats to validity}
 
