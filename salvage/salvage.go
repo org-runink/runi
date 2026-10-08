@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -133,6 +134,75 @@ func First(text string) (string, bool) {
 // Unknown object fields are ignored, as with json.Unmarshal. It returns
 // ErrNoJSON if nothing decodes.
 func Decode(text string, v any) error { return decode(text, v, false) }
+
+// ErrTruncated reports that the text was cut off: a bracket, or a string, was
+// opened and never closed.
+var ErrTruncated = errors.New("salvage: the text is truncated")
+
+// ErrAmbiguous reports that more than one value in the text decoded into the
+// destination, so which one was meant is a guess.
+var ErrAmbiguous = errors.New("salvage: more than one value decodes into the destination")
+
+// DecodeOne is Decode for callers who need the reply to be unambiguous, and it
+// fails closed. It returns ErrTruncated if the text was cut off, ErrAmbiguous
+// if more than one value decodes, and ErrNoJSON if none does.
+//
+// This is the one to reach for when the decoded value drives a decision rather
+// than being shown to someone. A model asked for a verdict and cut off at a
+// token limit, or answering twice, is not a verdict; Decode would hand back the
+// first thing that fits, which is how a truncated review becomes an empty list
+// of findings and reads as approval. Nine call sites that each check those two
+// conditions by hand is the same mistake written nine times, so it is written
+// once, here.
+func DecodeOne(text string, v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return errors.New("salvage: DecodeOne needs a non-nil pointer")
+	}
+	vals, truncated := Scan(text)
+	if truncated {
+		return ErrTruncated
+	}
+	// The whole text, when it is itself one value, is the unambiguous case.
+	if trimmed := strings.TrimSpace(text); trimmed != "" && decodeOne(trimmed, v, false) == nil {
+		return nil
+	}
+	var matches []string
+	for _, c := range vals {
+		for _, cand := range unwrap(c.JSON) {
+			if decodeOne(cand, v, false) == nil {
+				matches = append(matches, cand)
+				break
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return ErrNoJSON
+	case 1:
+		return decodeOne(matches[0], v, false)
+	default:
+		return fmt.Errorf("%w: %d of them", ErrAmbiguous, len(matches))
+	}
+}
+
+// unwrap yields a candidate and, when it is an array holding exactly one
+// object, that object too. Models asked for an object routinely return it
+// wrapped in a list of one, and a caller who asked for an object should not
+// have to own a second type to read it. More than one element is left alone:
+// picking from a list is a choice, not an unwrapping.
+func unwrap(c string) []string {
+	out := []string{c}
+	t := strings.TrimSpace(c)
+	if !strings.HasPrefix(t, "[") {
+		return out
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(t), &raw); err != nil || len(raw) != 1 {
+		return out
+	}
+	return append(out, string(raw[0]))
+}
 
 // DecodeStrict is Decode, except a value carrying fields the destination does
 // not have is not a match. Use it when the shape itself is the signal, so a
