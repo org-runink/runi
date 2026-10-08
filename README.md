@@ -2,7 +2,7 @@
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-logo.jpg" alt="Arlo, the Runink Australian Shepherd, wearing the Runi rig: AR goggles and a powered herding harness" width="220">
 </p>
 
-<h1 align="center">runi</h1>
+<h1 align="center">Runi</h1>
 
 <p align="center">
   <strong>Arlo does the herding. Runi is the rig he wears to do it.</strong>
