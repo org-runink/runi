@@ -41,7 +41,7 @@ go get github.com/org-runink/runi
 
 | Package | One line | Coverage |
 |---|---|---|
-| [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, without leaking the test set | **100%** |
+| [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, and test whether a relationship is real | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
@@ -209,6 +209,23 @@ depressingly common. The API makes the correct thing the easy thing.
 shuffle. Shuffling a time series before splitting lets the model see the future;
 the scores come out excellent and mean nothing. `RollingFolds` gives expanding
 windows where each fold only ever trains on data preceding its validation span.
+
+**Is it real?** A correlation or a slope says how strong a relationship looks,
+not whether it is there. Two unrelated random series of four points clear
+|r| ≥ 0.5 about half the time; so the numbers come with their evidence:
+
+```go
+c, ok := stats.Correlate(adSpend, signups) // r, n and the two-sided p-value; ok=false under 20 points
+t := stats.Trend(weeklyReturns)            // slope, standard error, t, p; t.Rising(0.05)
+stats.Adjust(pairs, 0.05)                  // Benjamini–Hochberg across every pair you tested
+```
+
+Test forty-five pairs at a 5% level and you should expect two "findings" from
+pure noise; `Adjust` controls the share of false findings among the ones you
+keep. The Student-t tail is computed here (the standard library has none) and
+is pinned to published critical values. These are tests against zero under
+the usual assumptions, including independent observations: detrend two
+trending series before you correlate them.
 
 Also here: `Mean` (compensated summation, so a long series does not quietly lose
 its small values), `Variance`/`StdDev` in sample and population forms,
