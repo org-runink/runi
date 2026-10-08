@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-10-informational" alt="ten packages">
+  <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
   <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -51,6 +51,7 @@ go get github.com/org-runink/runi
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
+| [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -85,6 +86,7 @@ you are still the one doing the work.
 | 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
+| 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -535,6 +537,33 @@ but stopping the goroutine is up to you. The caps are a plan, not a
 measurement. `Plan.CriticalPath` tells you whether the plan fits the deadline
 with every phase at its cap. Whether the phases fit their caps is something to
 measure on the hardware that runs them.
+
+---
+
+## `runi/chain` — records nobody can quietly rewrite
+
+A log of decisions, approvals or payments is only worth keeping if an edit
+shows. `chain` seals each record with a hash that covers the one before it, so
+changing, moving or swapping a record breaks the chain at that point.
+
+```go
+l1 := chain.Seal(chain.Bound, "", body1)       // body: your canonical bytes
+l2 := chain.Seal(chain.Bound, l1.Hash, body2)
+head, err := chain.Verify(chain.Bound, links)  // err is a *chain.Break
+```
+
+`Verify` stops at the first link that does not hold and says how it broke:
+**altered** (edited after sealing), **reordered** (records moved), or
+**replaced** (the record it was sealed after was swapped out or removed).
+`VerifyFrom` checks a segment from a known hash. `Bound` seals the previous
+hash into each link. `BodyOnly` is for existing logs whose records already
+carry it.
+
+**Tamper-evident, not tamper-proof.** Nothing is signed: whoever can write the
+log can rewrite it consistently from any point on, and dropping the newest
+records leaves a shorter chain that still verifies. Keep each head hash
+somewhere the writer cannot change. The records, their encoding and their
+storage stay yours.
 
 ---
 
