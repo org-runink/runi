@@ -15,22 +15,106 @@ var ErrNoJSON = errors.New("salvage: no JSON value in the text decoded into the 
 
 // Candidates returns every top-level balanced JSON object or array in text, in
 // order of appearance. A value nested inside another is part of its enclosing
-// value, not a candidate of its own. Brackets inside JSON strings are ignored,
-// and an opening bracket that is never closed yields nothing.
+// value, not a candidate of its own, and an opening bracket that is never
+// closed yields nothing — not even the values inside it. See Scan if you need
+// to know that the text was cut off.
 //
 // A candidate is balanced, not necessarily valid JSON: Decode checks validity.
 func Candidates(text string) []string {
-	var out []string
-	for i := 0; i < len(text); i++ {
-		if text[i] != '{' && text[i] != '[' {
-			continue
-		}
-		if end := closing(text, i); end > i {
-			out = append(out, text[i:end+1])
-			i = end
-		}
+	vals, _ := Scan(text)
+	if len(vals) == 0 {
+		return nil
+	}
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = v.JSON
 	}
 	return out
+}
+
+// Value is one balanced candidate and where it was found, so a caller can
+// report a position or slice the surrounding text.
+type Value struct {
+	JSON  string // the candidate, text[Start:End]
+	Start int    // byte offset of the opening bracket
+	End   int    // byte offset just past the closing bracket
+}
+
+// Scan returns every top-level balanced value in text, and whether the text was
+// truncated: a bracket was opened and never closed.
+//
+// Truncation is reported because it is the one failure that silently produces a
+// WRONG answer rather than no answer. A reply cut off at a token limit leaves
+// its outer object unclosed while the objects nested inside it are complete, so
+// treating those as top-level hands back a fragment that decodes cleanly and
+// means something entirely different from the whole. The case that matters: a
+// reviewer asked for {"findings": [...]} is cut off mid-list, the first finding
+// decodes on its own, its "findings" key is absent, and the caller reads zero
+// findings from a reply that was reporting several. Scan yields nothing for the
+// unclosed region and sets truncated, so a caller can fail closed.
+//
+// Scan is a single pass that honours JSON string literals and escapes and
+// matches brackets by type, so "{"a": [1, 2]}" is one value and a "]" inside an
+// object does not close it.
+func Scan(text string) (vals []Value, truncated bool) {
+	var stack []byte // the open brackets, outermost first
+	start := -1
+	inString, escaped := false, false
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			// A string outside any bracket is not a candidate: Decode tries the
+			// whole text for that. Inside one it is just content.
+			inString = true
+		case '{', '[':
+			if len(stack) == 0 {
+				start = i
+			}
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				// A stray closer. Not truncation — there was nothing to close.
+				continue
+			}
+			want := byte('}')
+			if stack[len(stack)-1] == '[' {
+				want = ']'
+			}
+			if c != want {
+				// Mismatched nesting, as in {"a": [}]}. The document is broken
+				// beyond extraction; abandon the whole region rather than
+				// guessing which bracket was meant.
+				stack = stack[:0]
+				start = -1
+				truncated = true
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 && start >= 0 {
+				vals = append(vals, Value{JSON: text[start : i+1], Start: start, End: i + 1})
+				start = -1
+			}
+		}
+	}
+	// Anything still open at the end was never closed. Its contents are NOT
+	// emitted: see the note above on why that matters.
+	if len(stack) > 0 || inString {
+		truncated = true
+	}
+	return vals, truncated
 }
 
 // First returns the first candidate that is valid JSON, and false if there is
@@ -98,42 +182,4 @@ func decodeOne(s string, v any, strict bool) error {
 	}
 	dst.Set(fresh.Elem())
 	return nil
-}
-
-// closing returns the index of the bracket that closes the one at start,
-// honouring string literals and escapes, or -1 if it is never closed.
-func closing(s string, start int) int {
-	open := s[start]
-	shut := byte('}')
-	if open == '[' {
-		shut = ']'
-	}
-	depth := 0
-	inString, escaped := false, false
-	for i := start; i < len(s); i++ {
-		c := s[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case open:
-			depth++
-		case shut:
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
 }

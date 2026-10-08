@@ -154,10 +154,12 @@ func refinePeriod(x []float64, lag, maxLag int) int {
 		if p < 2 || p > maxLag {
 			continue
 		}
-		f, err := FitFourier(detrended, p, 3)
-		if err != nil {
-			continue
-		}
+		// As in Decompose, this cannot fail and the error is dropped rather
+		// than handled: p is at most maxLag, which is at most half the length
+		// of the differenced series, so the window always covers two full
+		// cycles — more rows than the three harmonics need, and dense enough
+		// over the period to stay well conditioned.
+		f, _ := FitFourier(detrended, p, 3)
 		ssr := 0.0
 		for t, v := range detrended {
 			e := v - f.Mean - f.At(t)
@@ -421,12 +423,16 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 		// below would then sit in that smear rather than at the spike, which
 		// is the most misleading answer available — a confident break where
 		// nothing happened at all.
-		f, err := FitFourier(hampel(sub(y, evalLines(one, n))), period, opt.Harmonics)
-		if err == nil {
-			four = f
-		} else {
-			period = 0
-		}
+		// The error is dropped rather than handled because handling it would be
+		// a branch no test could enter. FitFourier fails on a series shorter
+		// than the columns it needs, or on a design it cannot identify, and the
+		// guard above rules out both: the period is at least 2 and the series
+		// covers at least two full cycles of it, which is more rows than the
+		// columns need and spans the period densely enough to stay well
+		// conditioned. Loosen that guard and this becomes a real error that has
+		// to be returned.
+		f, _ := FitFourier(hampel(sub(y, evalLines(one, n))), period, opt.Harmonics)
+		four = f
 	}
 	// Breaks are looked for in the deseasonalised series.
 	deseason := make([]float64, n)

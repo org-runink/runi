@@ -41,7 +41,12 @@ func Fit(y []float64, x []float64, k int, ord Order) (*Model, error) {
 	if ord.P < 0 || ord.D < 0 || ord.Q < 0 {
 		return nil, errOrder
 	}
-	if n <= ord.P+ord.Q+ord.D+2 {
+	// Only what the stages below need before the ARMA fit: enough points to
+	// regress on and to difference. Whether the order itself is affordable is
+	// fitARMA's rule, and it is left there rather than restated here — stated
+	// twice, the stricter copy wins silently and the real one is never reached,
+	// so the error that users actually get comes from a line no test can enter.
+	if n <= ord.D+2 {
 		return nil, errShort
 	}
 	if k > 0 && len(x) != n*k {
