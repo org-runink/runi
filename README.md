@@ -756,6 +756,26 @@ So before proposing one, answer two questions in the PR:
 A good package that does not fit is not a rejection. It is a module of its own,
 and it will do better with a name that describes it.
 
+### What will never be here
+
+Set by the project owner, 2026-10-08. These are not "not yet" — they are out of
+scope permanently, and a PR proposing one will be closed rather than reworked.
+
+**Domain logic.** Logistics and industry identifiers (GS1, GTIN/SSCC/GLN,
+ISO 6346 container codes), routing and route optimisation, ontologies, statute
+and regulatory deadlines, catalogues. These encode knowledge of a business, not
+a data primitive, and they stay with the business.
+
+**Detection patterns, of any kind.** PII masking rules, credential and secret
+scrubbing, prompt-injection and guard rules — anything that reveals what we
+detect. Publishing a detector publishes its gaps: it tells a reader exactly what
+is caught and therefore what is not, which helps an attacker more than it helps
+a user. This holds even when the patterns are individually unremarkable.
+
+If you are contributing from inside Runink and a package touches either of
+these, it stays in the private repository. That applies no matter how clean,
+well-tested or generic-looking the code is.
+
 ### The bar
 
 1. **Zero dependencies.** It is why these work in a CLI, a sidecar, a WASM build
