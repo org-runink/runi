@@ -213,12 +213,13 @@ func (s *Store[K, V]) storeLocked(key K, v V, err error) {
 	e := &entry[V]{key: key, val: v, err: err, expires: s.expiryLocked()}
 	e.el = s.lru.PushFront(key)
 	s.entries[key] = e
+	// The list and the map are modified together and only here, so the list
+	// holds exactly one element per entry. Reaching this loop means there are
+	// more entries than the capacity allows, hence at least one element, hence
+	// a non-nil Back. A nil check here would be a branch no test could ever
+	// enter, which is worse than no check: it would read as a handled case.
 	for s.opts.Capacity > 0 && len(s.entries) > s.opts.Capacity {
-		back := s.lru.Back()
-		if back == nil {
-			break
-		}
-		s.removeLocked(back.Value.(K))
+		s.removeLocked(s.lru.Back().Value.(K))
 		s.stats.Evictions++
 	}
 }

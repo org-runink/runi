@@ -48,6 +48,19 @@ func PACF(y []float64, maxLag int) []float64 {
 	if len(r) == 0 {
 		return nil
 	}
+	return levinson(r, maxLag)
+}
+
+// levinson runs the Durbin–Levinson recursion over an autocorrelation sequence.
+// It is separate from PACF because its one guard — a prediction variance that
+// has collapsed to nothing — cannot be reached through PACF: for a sample
+// autocorrelation sequence computed from real data the recursion keeps every
+// reflection coefficient strictly inside (-1, 1), so the variance stays
+// positive. The guard is for a degenerate sequence, such as the perfectly
+// correlated r = [1, 1, 1, …] a caller could construct, where the first step
+// already leaves nothing to divide by. Splitting it out is what lets that case
+// be tested with the input it exists for, instead of being asserted about.
+func levinson(r []float64, maxLag int) []float64 {
 	out := make([]float64, len(r))
 	out[0] = 1
 	if maxLag == 0 {
@@ -65,6 +78,8 @@ func PACF(y []float64, maxLag int) []float64 {
 			num -= prev[j] * r[k-j]
 		}
 		if math.Abs(v) < 1e-300 {
+			// Nothing left to divide by: the series is perfectly predictable
+			// from the lags already used, so every further lag adds nothing.
 			break
 		}
 		pk := num / v

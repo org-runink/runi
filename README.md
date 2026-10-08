@@ -42,14 +42,14 @@ go get github.com/org-runink/runi
 | Package | One line | Coverage |
 |---|---|---|
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, and test whether a relationship is real | **100%** |
-| [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
-| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart | 97.6% |
+| [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | **100%** |
+| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart | **100%** |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
-| [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
-| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 79.1% |
-| [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
-| [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
+| [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | **100%** |
+| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 96.9% |
+| [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | **100%** |
+| [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
 
@@ -798,7 +798,7 @@ not a flaw in `lru_cache`, which never promised single-flight; it is the reason
 
 ### On the coverage figure
 
-`stats`, `bm25` and `lazy` are at 100%. `arimax` is at 99.3%, `memo` 99.5% and `avro` 95.8% (its gap is io-error branches in the OCF writer, and its CI floor rises as they are covered). Rather than
+Every package is at 100% of statements except `tablelog`, which is at 96.9%. Its remaining lines are branches that only execute when two writers collide in a particular order — the commit-conflict and re-plan paths — and its CI floor rises as they are covered. Rather than
 write tests that execute a line without asserting anything, here is every
 statement that is not covered and why:
 
@@ -826,7 +826,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **92.2%** of statements overall; `stats`, `bm25` and `lazy` at 100%. Floors are enforced **per package**, so a strong package cannot pay for a weak one. `avro` and `tablelog` are newest and carry the lowest floors |
+| **Test coverage** | **99.3%** of statements across the ten packages (the `benchmarks/` commands are excluded; they are programs, not library code); every package at 100% except `tablelog` at 96.9%. Floors are enforced **per package**, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |

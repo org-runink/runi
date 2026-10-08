@@ -127,3 +127,13 @@ func (m *MemStore) Len() int {
 }
 
 var _ Store = (*MemStore)(nil)
+
+// Overwrite replaces an object unconditionally, which no Store method can do.
+// It exists so a test can corrupt a specific object and check that the table
+// reports it rather than reading past it; production code must go through
+// PutIfAbsent so a lost race is still a lost race.
+func (m *MemStore) Overwrite(key string, data []byte) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.objects[key] = append([]byte(nil), data...)
+}

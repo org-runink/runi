@@ -119,9 +119,16 @@ func TestDecodeTrailingDataGoesToTheCandidate(t *testing.T) {
 func TestCandidates(t *testing.T) {
 	text := "a {\"x\":{\"y\":[1,{\"z\":2}]}} b [3,4] c {unclosed d \"{\" {\"s\":\"]\"}"
 	got := Candidates(text)
-	want := []string{`{"x":{"y":[1,{"z":2}]}}`, `[3,4]`, `{"s":"]"}`}
-	// "{unclosed ..." never closes at top level: it swallows to the end and is
-	// not a candidate; the scan then finds the balanced value inside it.
+	want := []string{`{"x":{"y":[1,{"z":2}]}}`, `[3,4]`}
+	// "{unclosed" never closes, so it swallows the rest of the text — INCLUDING
+	// the balanced {"s":"]"} inside it, which is not a candidate of its own.
+	//
+	// This assertion used to expect that inner value, and getting it was the
+	// bug: a model reply cut off at a token limit leaves its outer object open
+	// while the objects nested inside it are complete, so returning them hands
+	// back a fragment that decodes cleanly and means something else entirely.
+	// TIDE hit the sharp version — a truncated review decoding to zero findings
+	// because the surviving fragment had no "findings" key at all.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Candidates = %q\nwant %q", got, want)
 	}

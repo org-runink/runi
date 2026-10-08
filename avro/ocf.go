@@ -37,7 +37,7 @@ func WriteOCF[T any](w io.Writer, schemaJSON, codec string, records []T, marshal
 		return fmt.Errorf("avro: unsupported codec %q", codec)
 	}
 	var sync [16]byte
-	if _, err := rand.Read(sync[:]); err != nil {
+	if _, err := randRead(sync[:]); err != nil {
 		return err
 	}
 
@@ -66,13 +66,16 @@ func WriteOCF[T any](w io.Writer, schemaJSON, codec string, records []T, marshal
 	payload := body.Bytes()
 	if codec == CodecDeflate {
 		var cb bytes.Buffer
+		// flate.NewWriter only rejects an out-of-range level, and the level
+		// here is a constant. Its sink is a bytes.Buffer, whose Write is
+		// documented never to return an error, so neither Write nor Close
+		// below can fail. They are not checked because the checks would be two
+		// branches no test could ever enter, which read as handled cases and
+		// are not. If this ever compresses straight to w instead of to memory,
+		// both errors become real and must be returned.
 		fw, _ := flate.NewWriter(&cb, flate.DefaultCompression)
-		if _, err := fw.Write(payload); err != nil {
-			return err
-		}
-		if err := fw.Close(); err != nil {
-			return err
-		}
+		_, _ = fw.Write(payload)
+		_ = fw.Close()
 		payload = cb.Bytes()
 	}
 
@@ -220,3 +223,9 @@ func readMetaMap(br *bufio.Reader) (map[string][]byte, error) {
 		}
 	}
 }
+
+// randRead supplies the per-file sync marker. It is a variable so a test can
+// make it fail: a container written with a sync marker that was never
+// generated would be silently unreadable, so the error has to be returned, and
+// an error that is returned but never exercised is not known to work.
+var randRead = rand.Read
