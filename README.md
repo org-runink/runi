@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-9-informational" alt="nine packages">
+  <img src="https://img.shields.io/badge/packages-10-informational" alt="ten packages">
   <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -43,6 +43,7 @@ go get github.com/org-runink/runi
 |---|---|---|
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, and test whether a relationship is real | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
+| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart | 97.6% |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
@@ -324,6 +325,43 @@ intervals covered **97.4%** of realised values over 1,800 held-out points.
 
 82.0% lower RMSE than naive carry-forward. Full tables, and a section on what
 the numbers do **not** show, in [arimax/BENCHMARKS.md](arimax/BENCHMARKS.md).
+
+## `runi/season` — what repeats, and where it broke
+
+Before you forecast a series, two questions come first: does it repeat, and
+did its trend break somewhere? Each is useful on its own, so each is its own
+function.
+
+```go
+p := season.Period(y, 0)               // 7 for weekly, 0 for "no season"
+breaks := season.Changepoints(y, 3)    // indices where the trend changed
+d, _ := season.Decompose(y, season.Options{})
+next := d.Forecast(14)                 // trend continued + season
+```
+
+**It says "no season" when there is none.** Scanning dozens of lags for a peak
+finds one in pure noise unless the bar is raised for the number of lags tried.
+Over 500 white-noise series of 200 points, **0** were given a season; the test
+fails if that rate reaches 1%.
+
+**It does not invent breaks.** A split is kept only if it pays a price scaled
+to the series' own noise, so a noisy straight line comes back with no
+changepoints — tested over 40 lines and 40 pure-noise series — while a planted
+slope change or level shift is found within a few points.
+
+**The season is fitted by least squares**, so its amplitude is right even when
+the series is not a whole number of cycles (recovered within 5% in the tests;
+the projection shortcut is biased there).
+
+**This is not Prophet.** Prophet is Meta's forecasting library; it adds
+holidays, several seasonalities and a Bayesian treatment of changepoints. If you
+want Prophet, use Prophet. This is the classical additive decomposition
+underneath, with no dependencies.
+
+What it does not do: **one** seasonality only (the strongest wins); the trend is
+straight lines between breaks, fitted independently, so a forecast extends the
+last line; no prediction intervals. Short series are refused rather than
+guessed at: `Period` needs 8 points and two full cycles, `Decompose` needs 4.
 
 ## `runi/avro` — Apache Avro without the dependency tree
 
