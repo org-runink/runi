@@ -54,13 +54,13 @@ jobs:
           fi
       - name: coverage must not regress
         run: |
-          go test -coverprofile=coverage.out ./arimax ./memo ./lazy
+          go test -coverprofile=coverage.out ./arimax ./memo ./lazy ./stats ./bm25
           go tool cover -func=coverage.out | tail -1
           # A floor, not a target. It exists so a change that drops a tested
           # branch fails here rather than being noticed months later. Raise it
           # when coverage genuinely rises; never lower it to make a build pass.
           total=$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9.]+%' | tr -d '%')
-          floor=99.0
+          floor=99.5
           echo "total coverage ${total}% (floor ${floor}%)"
           awk -v t="$total" -v f="$floor" 'BEGIN { if (t+0 < f+0) { exit 1 } }' || {
             echo "::error::coverage ${total}% is below the ${floor}% floor"; exit 1; }

@@ -25,14 +25,15 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/coverage-99.3%25%20%7C%2099.5%25%20%7C%20100%25-brightgreen" alt="coverage">
+  <img src="https://img.shields.io/badge/packages-5-informational" alt="five packages">
+  <img src="https://img.shields.io/badge/coverage-99.6%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
 
 ---
 
-**Three small Go packages for making expensive work cheaper: forecast it, cache
-it, or start it early.** Standard library only — no dependencies, in any package.
+**A data toolkit for Go: explore it, forecast it, search it, and make it fast.**
+Standard library only — no dependencies, in any package.
 
 ```bash
 go get github.com/org-runink/runi
@@ -40,7 +41,9 @@ go get github.com/org-runink/runi
 
 | Package | One line | Coverage |
 |---|---|---|
+| [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, without leaking the test set | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
+| [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
 
@@ -69,7 +72,9 @@ you are still the one doing the work.
 
 | The gear | The package | What it gives you |
 |---|---|---|
+| 👁️ **the eyes** | [`stats`](#runistats--the-first-ten-minutes) | Look at the flock before doing anything: how many, how spread out, how they move together |
 | 🥽 **the goggles** | [`arimax`](#runiarimax--forecasting-with-external-drivers) | See what is coming — and how far ahead the view can honestly be trusted |
+| 👃 **the nose** | [`bm25`](#runibm25--search-without-a-model) | Find the one you were asked for, by name, among thousands |
 | 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 
@@ -81,6 +86,161 @@ you are still the one doing the work.
   <em>Runink's mascot is a working dog, not a logo.<br>
   These packages are built the same way: measured, documented, and honest about their limits.</em>
 </p>
+
+---
+
+---
+
+## Coming from Python?
+
+If you work in pandas, scikit-learn or statsmodels, the first hour in Go is
+usually the one that decides whether there is a second. Here is the map.
+
+| What you'd write in Python | In Go, with `runi` |
+|---|---|
+| `df['x'].describe()` | `stats.Describe(x)` |
+| `np.quantile(x, 0.9)` | `stats.Quantile(x, 0.9)` *(same definition — NumPy's default / R type 7)* |
+| `df['a'].corr(df['b'])` | `stats.Pearson(a, b)` — and `stats.Spearman` for rank |
+| `StandardScaler().fit(train).transform(test)` | `sc := stats.FitStandardiser(train); sc.Transform(test)` |
+| `MinMaxScaler()` | `stats.FitMinMax(train)` |
+| `TimeSeriesSplit(n_splits=5)` | `stats.RollingFolds(n, 5)` |
+| `train_test_split(..., shuffle=False)` | `stats.Split(x, 0.8)` |
+| `SARIMAX(y, exog=X, order=(1,0,1)).fit()` | `arimax.Fit(y, x, 1, arimax.Order{P:1, D:0, Q:1})` |
+| `res.get_forecast(6).conf_int()` | `m.Forecast(6, xFuture, 0.05)` — point, lower, upper |
+| `rank_bm25.BM25Okapi(corpus)` | `bm25.New(docs, bm25.Options{})` |
+| `functools.lru_cache` | `memo.New[K,V](...)` — **plus single-flight**, which `lru_cache` has no equivalent of |
+| `dask.delayed` / a lazily-evaluated future | `lazy.New(...)`, `lazy.Start`, `lazy.All` |
+
+**What you give up:** the ecosystem. There is no seaborn here, no notebook, no
+`pd.read_sql`, and nothing in this module will ever train a neural network.
+
+**What you get:** a 6 MB static binary with no runtime and no dependency tree,
+fits that are [42–54× faster than statsmodels](#against-the-python-reference-implementations)
+at the same interval calibration, and real parallelism — `lazy.All` over five
+80 ms values finishes in 81 ms, not 400 ms, with no GIL to work around.
+
+**The honest recommendation:** explore in Python. Ship in Go. This module exists
+for the second half of that sentence — the moment a model has to run inside a
+request, per tenant, a thousand times an hour.
+
+### A whole small pipeline
+
+Describe, split, scale, fit, forecast, score. No dependencies, nothing hidden.
+
+```go
+package main
+
+import (
+	"fmt"
+
+	"github.com/org-runink/runi/arimax"
+	"github.com/org-runink/runi/stats"
+)
+
+func main() {
+	y, x := loadSeries() // your data: demand, and a driver like price
+
+	// 1. Look at it first.
+	fmt.Printf("%+v\n", stats.Describe(y))
+
+	// 2. Split WITHOUT shuffling — order carries information here.
+	k := stats.SplitIndex(len(y), 0.8)
+	yTrain, yTest := y[:k], y[k:]
+	xTrain, xTest := x[:k], x[k:]
+
+	// 3. Fit on the training half only.
+	m, err := arimax.Fit(yTrain, xTrain, 1, arimax.Order{P: 1, D: 1, Q: 1})
+	if err != nil {
+		panic(err)
+	}
+
+	// 4. Forecast the held-out span, with 95% intervals.
+	point, lo, hi, err := m.Forecast(len(yTest), xTest, 0.05)
+	if err != nil {
+		panic(err)
+	}
+
+	// 5. Score it, and check the intervals were honest.
+	fmt.Printf("RMSE %.3f\n", arimax.RMSE(yTest, point))
+	inside := 0
+	for i := range yTest {
+		if yTest[i] >= lo[i] && yTest[i] <= hi[i] {
+			inside++
+		}
+	}
+	fmt.Printf("%d of %d actuals inside the 95%% interval\n", inside, len(yTest))
+}
+```
+
+That last step is the one people skip. A forecast without a calibrated interval
+is a number with no error bar, and an interval nobody checked is decoration.
+
+## `runi/stats` — the first ten minutes
+
+Before a model there is a column of numbers nobody has looked at. This is what
+you look at it with.
+
+```go
+s := stats.Describe(revenue)
+// {N:482 NaN:3 Mean:1240.7 StdDev:318.4 Min:402 Q1:1011 Median:1223 Q3:1455 Max:2890}
+```
+
+`Describe` is the only function here that skips NaN, and it **tells you how many
+it skipped**. Everywhere else a NaN in gives a NaN out, because quietly dropping
+values changes the denominator and the caller is almost never told.
+
+**Scalers are fitted, then applied.** This is the package's one opinion:
+
+```go
+sc := stats.FitStandardiser(train)
+trainZ, _ := sc.Transform(train)
+testZ, _ := sc.Transform(test) // the TRAINING mean and sd, deliberately
+```
+
+There is deliberately no one-step "scale this slice" function. Re-fitting a
+scaler on your test set leaks its distribution into the model and makes every
+score after it too optimistic — a mistake that is invisible in the output and
+depressingly common. The API makes the correct thing the easy thing.
+
+**Splitting respects order.** `stats.Split` and `stats.RollingFolds` never
+shuffle. Shuffling a time series before splitting lets the model see the future;
+the scores come out excellent and mean nothing. `RollingFolds` gives expanding
+windows where each fold only ever trains on data preceding its validation span.
+
+Also here: `Mean` (compensated summation, so a long series does not quietly lose
+its small values), `Variance`/`StdDev` in sample and population forms,
+`Quantile` matching NumPy's default definition, `Median`, `IQR`, `Pearson` and
+`Spearman`.
+
+---
+
+## `runi/bm25` — search without a model
+
+Ranking by the words a document and a query share. No model, no vector store,
+no GPU, no embedding to re-compute when the text changes.
+
+```go
+ix := bm25.New(docs, bm25.Options{})
+for _, r := range ix.Search("disk controller timeout", 10) {
+	fmt.Println(r.ID, r.Score, r.Terms) // Terms says WHY it ranked
+}
+```
+
+**Where this beats an embedding search:** exact tokens. Identifiers, SKUs, error
+codes, version numbers. The embedding of `ERR-4021` sits right next to the
+embedding of `ERR-4022`, which is precisely wrong; BM25 keeps them apart. It is
+also explainable — `Result.Terms` reports each matching term's contribution, and
+those contributions sum to the score — and it indexes as fast as you can read
+the text.
+
+**Where it does not:** BM25 matches words, not meaning. A query for *car* will
+not find a document that only says *automobile*. If your users paraphrase, this
+alone will disappoint them.
+
+Two details worth knowing: the IDF uses the `+1` smoothing, so a term appearing
+in most documents can never drive a score **negative** the way the textbook form
+can; and scores are only comparable **within one query**, so rank and cut by
+position rather than by a threshold.
 
 ---
 
@@ -405,7 +565,7 @@ not a flaw in `lru_cache`, which never promised single-flight; it is the reason
 
 ### On the coverage figure
 
-`lazy` is at 100%. `arimax` is at 99.3% and `memo` at 99.5%, and rather than
+`stats`, `bm25` and `lazy` are at 100%. `arimax` is at 99.3% and `memo` at 99.5%, and rather than
 write tests that execute a line without asserting anything, here is every
 statement that is not covered and why:
 
@@ -433,7 +593,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **99.3% / 99.5% / 100%** of statements (arimax / memo / lazy). The four uncovered lines are listed above, with the reason each is unreachable |
+| **Test coverage** | **99.6%** of statements overall; `stats`, `bm25` and `lazy` at 100%. The four uncovered lines are listed above, with the reason each is unreachable |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
