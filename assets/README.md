@@ -1,35 +1,23 @@
-# Artwork brief
+# Artwork
 
-Placeholder for the welcome-page image referenced by the root README. Drop the
-rendered file here as `runi-banner.png` (and `runi-banner@2x.png` for retina) and
-it will appear automatically.
+| File | Size | Use |
+|---|---|---|
+| `runi-logo.jpg` | 1024×1024 | the mark — README header at 200px, favicon source, avatars |
+| `runi-wallpaper.jpg` | 1376×768 | landscape banner, desktop wallpaper, slide backgrounds |
 
-## The scene
+Runi is the Runink Australian Shepherd and the project's namesake: she keeps the
+flock together so nothing has to be rounded up twice, which is what these
+packages do.
 
-**The Go Gopher as a shepherd, with Runi — the Runink Australian Shepherd —
-working beside him.** The joke is that the Gopher is nominally in charge and the Aussie is doing
-the actual herding — which is roughly how these packages relate to the code that
-uses them.
+All rights reserved — see [TRADEMARKS.md](../TRADEMARKS.md). The code is
+BSD-3-Clause; this artwork is not.
 
-Runi is the package's namesake and the Runink mascot, so she should be the one
-doing the work: alert, mid-task, clearly competent. Water in the background ties
-her to River and Tide without needing a caption — a stream or shoreline is
-enough. She is herding, and nothing has to be rounded up twice, which is what
-the packages do.
+## If these are re-rendered
 
-## Constraints that are not negotiable
-
-- **The Gopher must be recognisably Renée French's Gopher.** Her design, her
-  CC-BY 3.0 licence. A derivative pose (shepherd's crook, hat) is fine; a
-  redrawn "gopher-like" animal is not — it loses the reference and the goodwill.
-- **Attribution to Renée French must appear** wherever the image is used, per
-  CC-BY 3.0. The root README and [TRADEMARKS.md](../TRADEMARKS.md) carry it.
-- **Do not use the Go logo or the word mark "Go"** in the artwork. Those are
-  Google trademarks and would imply endorsement.
-- Keep it legible at **64 px tall** — most people meet it as a small README
-  banner, not full size.
-
-## Format
-
-PNG with transparency, roughly 1200×400 for the banner. SVG source alongside it
-if the illustrator works in vector, so it can be re-rendered.
+- The logo must stay legible at **64px** and as a **circular crop** (avatars,
+  favicons). The current badge survives both because the dog's head fills the
+  frame and the "RUNI" banner sits inside the ring.
+- Keep a version with a **transparent background** if one is produced — the
+  current logo has a white field, which shows as a square on dark README themes.
+- Source files (SVG or layered) are worth keeping alongside the exports so the
+  mark can be re-rendered at other sizes without tracing it again.

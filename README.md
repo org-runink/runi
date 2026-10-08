@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/runi-banner.png" alt="Runi, the Runink Australian Shepherd, working alongside the Go Gopher as shepherd" width="620">
+  <img src="assets/runi-logo.jpg" alt="Runi, the Runink Australian Shepherd, in AR goggles and a tech harness" width="200">
 </p>
 
 <h1 align="center">runi</h1>
@@ -190,11 +190,14 @@ water:
 
 ## Artwork and marks
 
-The Gopher is **Renée French's**, used under
-[CC-BY 3.0](https://creativecommons.org/licenses/by/3.0/) with attribution, as
-that licence requires. The Australian Shepherd and the Runink marks are Runink's
-and are not covered by this repository's licence. Full detail, and what you may
-reuse in a fork, in [TRADEMARKS.md](TRADEMARKS.md).
+<p align="center">
+  <img src="assets/runi-wallpaper.jpg" alt="Runi running through a neon-lit street in the rain" width="760">
+</p>
+
+Runi, the Runink logo and the Runink marks are held by **Runink** and are **not**
+covered by this repository's BSD-3-Clause licence. The code is yours to use; the
+artwork is not. Detail, and what you may do in a fork, in
+[TRADEMARKS.md](TRADEMARKS.md).
 
 This project is not affiliated with or endorsed by Google. "Go" and the Go logo
 are trademarks of Google LLC.
