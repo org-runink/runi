@@ -15,6 +15,18 @@
 // several seasonalities at once. If you want Prophet, use Prophet. This
 // package is the textbook decomposition underneath, with no dependencies.
 //
+// Isolated outliers are filtered out of what the estimators measure, but not
+// out of what they return. Every estimate here is a sum of squares, so one bad
+// reading of magnitude a contributes a² and outvotes the rest of the series:
+// unguarded, a single spike is enough to hide a weekly season completely and
+// to be reported as two structural breaks around itself. So Period,
+// Changepoints and Decompose score on a copy with isolated spikes replaced by
+// their local median, while the trend, season and residual they report are
+// fitted to the series as given. A bad day therefore still shows up as a large
+// Residual, where a caller looking for anomalies can find it, instead of being
+// smoothed away. A shift in level that LASTS is a break, not an outlier, and
+// survives the filter.
+//
 // Limits, stated so they are not discovered later:
 //   - One seasonality. A series with both a weekly and a yearly cycle gets the
 //     strongest one only.
@@ -23,6 +35,9 @@
 //     and a forecast extends the last line.
 //   - Short series are refused rather than guessed at: Period needs 8 points
 //     and two full cycles, Decompose needs 4 points.
+//   - A spike only a few times the noise is indistinguishable from the noise,
+//     and is neither filtered nor reliably detected. The filter earns its keep
+//     on spikes well clear of the noise, which is where the damage was.
 //   - No uncertainty intervals.
 package season
 
@@ -59,6 +74,19 @@ func Period(x []float64, maxPeriod int) int {
 		d[i-1] = x[i] - x[i-1]
 	}
 	m := len(d)
+
+	// Clean the differences before measuring anything.
+	//
+	// A single outlier day — a launch, a viral post, a sensor glitch — puts TWO
+	// large values into d: one step up and one step back down. Their squares
+	// dominate var0 below, every genuine autocorrelation is divided by a
+	// normaliser the season did not produce, and the series reports no season at
+	// all. One bad day should not make a weekly pattern invisible. See hampel.
+	//
+	// Replacing rather than dropping keeps the index alignment the
+	// autocorrelation depends on.
+	d = hampel(d)
+
 	mean := 0.0
 	for _, v := range d {
 		mean += v
@@ -113,6 +141,14 @@ func periodThreshold(m, lags int) float64 {
 // residual variance after removing a straight line wins.
 func refinePeriod(x []float64, lag, maxLag int) int {
 	detrended := sub(x, evalLines(fitLines(x, nil), len(x)))
+
+	// Clip the detrended series before scoring, for the same reason Period
+	// clips the differences: one outlier day otherwise dominates every residual
+	// sum below, and the period that happens to absorb it best wins. That tips
+	// the answer by one — a weekly series reported as eight-daily — which is
+	// harder to notice than no season at all and worse to act on.
+	detrended = hampel(detrended)
+
 	best, bestSSR := lag, math.Inf(1)
 	for p := lag - 1; p <= lag+1; p++ {
 		if p < 2 || p > maxLag {
@@ -256,7 +292,24 @@ func Changepoints(x []float64, maxK int) []int {
 	if n < 2*minSegment || maxK < 1 {
 		return nil
 	}
+	// The price of a split is set from the ORIGINAL series and the gain a split
+	// earns is measured on a cleaned one, and the two must not be swapped.
+	//
+	// noiseSigma is a median of absolute differences, so a handful of bad
+	// readings cannot inflate it and the price it sets is already honest.
+	// Filtering first would make it dishonest in the expensive direction: the
+	// filter trims the tails of the difference distribution, sigma comes out
+	// below the true noise level, every split looks underpriced, and the search
+	// invents breaks in pure noise. The gain has the opposite problem — it is a
+	// drop in squared error, which one outlier inflates without limit, so
+	// unfiltered it always outbids the price and a single bad reading is
+	// reported as two breaks bracketing it.
+	//
+	// Pricing from the raw series and scoring on the cleaned one is what makes
+	// both cases come out right. See hampel for why the filter is local: a
+	// shift that lasts is a break and has to survive it.
 	sigma := noiseSigma(x)
+	x = hampel(x)
 	price := 3 * sigma * sigma * math.Log(float64(n))
 	// An exactly piecewise-linear series has σ = 0; keep a floor relative to
 	// the data's scale so rounding error never pays for a split.
@@ -362,7 +415,13 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	var four Fourier
 	if period > 0 {
 		one := fitLines(y, nil)
-		f, err := FitFourier(sub(y, evalLines(one, n)), period, opt.Harmonics)
+		// Cleaned, like every other fit here. FitFourier is least squares, so
+		// a spike does not stay where it happened: it is spread over the
+		// harmonics and leaves a wrong season at every index. The breaks found
+		// below would then sit in that smear rather than at the spike, which
+		// is the most misleading answer available — a confident break where
+		// nothing happened at all.
+		f, err := FitFourier(hampel(sub(y, evalLines(one, n))), period, opt.Harmonics)
 		if err == nil {
 			four = f
 		} else {
@@ -381,7 +440,7 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	trend := evalLines(d.lines, n)
 	// Second pass: refit the season on what the final trend leaves.
 	if period > 0 {
-		if f, err := FitFourier(sub(y, trend), period, opt.Harmonics); err == nil {
+		if f, err := FitFourier(hampel(sub(y, trend)), period, opt.Harmonics); err == nil {
 			four = f
 		}
 	}
@@ -576,4 +635,92 @@ func solve(a [][]float64, b []float64) ([]float64, bool) {
 		x[r] = s / m[r][r]
 	}
 	return x, true
+}
+
+// A single bad reading is the most common defect in a real series, and every
+// estimator here is a sum of squares, so one spike of magnitude a contributes
+// a² and outvotes the rest of the data. The period search normalises by a
+// variance the spike inflates, which drives every autocorrelation below the
+// detection threshold and reports "no season". The break search fails the
+// other way: its BIC price comes from a robust scale the spike does NOT
+// inflate, so the spike's gain is free to buy splits and one bad day is
+// reported as two structural breaks bracketing it.
+//
+// Both are fixed by cleaning the series the estimator scores on, and the clean
+// has to tell an isolated spike from a genuine shift in level. It does that by
+// taking the two things it needs from two different places:
+//
+//   - the LEVEL a point is compared against is the median of a short window
+//     around it, because a level that lasts is a break and has to survive. A
+//     shift sustained for more than hampelHalf points carries its own window's
+//     median with it and is left alone; a spike is outvoted by its neighbours.
+//     A global median cannot do this — a short step moves neither the median
+//     nor the MAD of a long series, so it would be erased along with the spike.
+//
+//   - the SCALE that decides how far is too far comes from the WHOLE series,
+//     because a scale is the one thing a short window cannot estimate. Seven
+//     points have a MAD with enormous sampling variance, which underestimates
+//     σ often enough that a nominal 4σ test fired on four points of pure
+//     Gaussian noise in 150 — a rate near 1 in 37, not the 1 in 15787 the
+//     threshold claims. Those four replacements then made a straight line fit
+//     its two halves better than the price of a split, and the break search
+//     invented a break in noise. noiseSigma is a median of absolute
+//     differences over every point, so it is both robust to the spike and
+//     actually estimated.
+//
+// This is a Hampel filter (Hampel 1974; Davies & Gather 1993, JASA 88(423))
+// with a global scale.
+const (
+	// hampelHalf is the half-width of the comparison window. Three puts seven
+	// points in the window, so a level shift of four or more consecutive
+	// points — the shortest run minSegment will fit a line to — is preserved.
+	hampelHalf = 3
+	// hampelMADs is how many robust standard deviations from the local median a
+	// point may sit before its neighbours replace it. Four leaves clean data
+	// untouched while catching a spike several times the signal.
+	hampelMADs = 4.0
+)
+
+// hampel returns v with isolated outliers replaced by their local median. It
+// does not modify v. A zero scale (an exactly piecewise-linear series) disables
+// the filter rather than shaving its corners.
+//
+// Near the ends the window slides inward instead of shrinking, so every point
+// is judged against the same number of neighbours.
+func hampel(v []float64) []float64 {
+	n := len(v)
+	width := 2*hampelHalf + 1
+	if n < width+1 {
+		return v
+	}
+	// 0.6745 scales a Gaussian MAD to a standard deviation, so hampelMADs is
+	// read in the usual units rather than in MADs.
+	sigma := noiseSigma(v)
+	if !(sigma > 0) {
+		return v
+	}
+	limit := hampelMADs * sigma
+	out := make([]float64, n)
+	win := make([]float64, 0, width)
+	for i := range v {
+		lo := min(max(i-hampelHalf, 0), n-width)
+		win = append(win[:0], v[lo:lo+width]...)
+		if med := medianOf(win); math.Abs(v[i]-med) > limit {
+			out[i] = med
+			continue
+		}
+		out[i] = v[i]
+	}
+	return out
+}
+
+// medianOf is the median of a copy of v, so the caller's order survives.
+func medianOf(v []float64) float64 {
+	c := append([]float64(nil), v...)
+	sort.Float64s(c)
+	n := len(c)
+	if n%2 == 1 {
+		return c[n/2]
+	}
+	return (c[n/2-1] + c[n/2]) / 2
 }

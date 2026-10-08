@@ -357,3 +357,33 @@ func TestBetaFractionGuardsAZeroDenominator(t *testing.T) {
 		t.Errorf("betaFraction(1,1,1) = %v, want finite", got)
 	}
 }
+
+// The documented behaviour for a missing value: everything the standard error
+// feeds propagates as NaN, and P stays at 1 so neither Rising nor Falling can
+// fire on a series that was never measurable. FACE reported this as a
+// divergence from its own copy, which returned a defined StdErr of 0 — a
+// number that reads as an infinitely precise estimate of a slope that does not
+// exist. NaN is the honest answer, so it is the one that is now documented.
+func TestTrendNaNPropagates(t *testing.T) {
+	y := []float64{1, 2, math.NaN(), 4, 5, 6}
+	got := Trend(y)
+
+	if !math.IsNaN(got.Slope) {
+		t.Errorf("Slope = %v, want NaN", got.Slope)
+	}
+	if !math.IsNaN(got.StdErr) {
+		t.Errorf("StdErr = %v, want NaN (not a defined 0)", got.StdErr)
+	}
+	if !math.IsNaN(got.T) {
+		t.Errorf("T = %v, want NaN", got.T)
+	}
+	if got.P != 1 {
+		t.Errorf("P = %v, want 1", got.P)
+	}
+	if got.N != len(y) {
+		t.Errorf("N = %d, want %d", got.N, len(y))
+	}
+	if got.Rising(0.05) || got.Falling(0.05) {
+		t.Error("an unmeasurable series reported a direction")
+	}
+}
