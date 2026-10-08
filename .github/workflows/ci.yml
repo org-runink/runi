@@ -26,8 +26,8 @@ jobs:
         go: ['1.24', '1.25']
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version: ${{ matrix.go }}
           check-latest: true
@@ -42,8 +42,8 @@ jobs:
     name: format, coverage, dependencies
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version: '1.25'
       - name: gofmt must be clean
@@ -58,23 +58,50 @@ jobs:
           go tool cover -func=coverage.out | tail -1
       - name: ZERO dependencies is a guarantee, not an aspiration
         run: |
-          # The defining property of this module. If a require line ever appears,
-          # this fails the build rather than letting it land quietly.
-          if grep -qE '^\s*require' go.mod; then
-            echo "::error::go.mod gained a dependency; runi is standard-library only"; exit 1
+          set -u
+          MODULE=$(go list -m)
+          fail=0
+
+          # 1. go.mod must declare no requirements.
+          if grep -qE '^[[:space:]]*require' go.mod; then
+            echo "::error::go.mod gained a dependency; runi is standard-library only"; fail=1
           fi
-          deps=$(go list -deps ./... | grep -c '^github\.com/\|^golang\.org/x/' || true)
-          if [ "$deps" -ne 0 ]; then
-            echo "::error::non-stdlib packages in the dependency graph"; go list -deps ./...; exit 1
+
+          # 2. The module graph must contain only this module. (`go mod graph` is
+          #    NOT usable here: it always lists the go/toolchain pseudo-modules.)
+          mods=$(go list -m all | grep -v "^${MODULE}$" || true)
+          if [ -n "$mods" ]; then
+            echo "::error::module graph is not empty:"; echo "$mods"; fail=1
           fi
-          echo "confirmed: standard library only"
+
+          # 3. No imported package may live outside the standard library. A
+          #    non-stdlib import path has a dot in its first segment (a domain);
+          #    runi's own packages share the module prefix and are not deps.
+          ext() { grep -E '^[^/]*\.' | grep -v "^${MODULE}\(/\|$\)" || true; }
+          external=$(go list -deps ./... | ext)
+          if [ -n "$external" ]; then
+            echo "::error::non-stdlib packages in the dependency graph:"; echo "$external"; fail=1
+          fi
+
+          # 4. Prove the filter above can still fail. A guard that cannot fail is
+          #    worse than no guard: the first version of this step matched runi's
+          #    OWN packages and so could never pass. Feed it a known dependency
+          #    and require that it is flagged.
+          canary=$(printf 'fmt\n%s/memo\ngithub.com/pkg/errors\n' "$MODULE" | ext)
+          if [ "$canary" != "github.com/pkg/errors" ]; then
+            echo "::error::the dependency filter is broken - it did not flag an injected dependency"
+            echo "expected 'github.com/pkg/errors', got '$canary'"; fail=1
+          fi
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "confirmed: standard library only (filter self-test passed)"
 
   benchmarks:
     name: benchmarks run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-go@3041bf56c941b39c61721a86cd11f3bb1338122a # v5.2.0
         with:
           go-version: '1.25'
       - name: run every benchmark once
