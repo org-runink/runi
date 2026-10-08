@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/runi-logo.jpg" alt="Runi, the Runink Australian Shepherd, in AR goggles and a tech harness" width="200">
+  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-logo.jpg" alt="Runi, the Runink Australian Shepherd, in AR goggles and a tech harness" width="200">
 </p>
 
 <h1 align="center">runi</h1>
@@ -191,7 +191,7 @@ water:
 ## Artwork and marks
 
 <p align="center">
-  <img src="assets/runi-wallpaper.jpg" alt="Runi running through a neon-lit street in the rain" width="760">
+  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Runi running through a neon-lit street in the rain" width="760">
 </p>
 
 Runi, the Runink logo and the Runink marks are held by **Runink** and are **not**
