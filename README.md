@@ -799,6 +799,21 @@ well-tested or generic-looking the code is.
 6. **Prove a check can fail.** If you add a guard, feed it a violation and show
    it is caught. A green that could not have gone red is worth less than none.
 
+### Opening the PR is already publishing
+
+If you are contributing from inside Runink, note the order: **a branch pushed to
+this repository is public, and a pull request certainly is.** There is no
+private staging step here. Review happens on content that is already readable by
+anyone, and a force-push does not unpublish it.
+
+So: build it locally, test it locally, get the content cleared, and push once.
+Not "open a draft PR and sort the boundary out in review" — by then it is out.
+
+The same applies to tags with more force, because the Go module proxy serves
+version zips **immutably**. Before any tag, run `git ls-files` and read what the
+zip will actually contain, rather than reviewing only the diff. A file nobody
+meant to publish ships just as permanently as one that was intended.
+
 ### Adding a package
 
 - `doc.go` or a package comment that says what it is, what it is not, and when
