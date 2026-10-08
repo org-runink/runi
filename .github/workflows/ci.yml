@@ -60,10 +60,12 @@ jobs:
           # not targets. Raise one when its coverage genuinely rises; never lower
           # one to make a build pass.
           #
-          # avro's floor is the lowest because it is the newest: its remaining gap
-          # is io-error branches in the OCF writer. It rises as those are covered.
+          # avro and tablelog have the lowest floors because they are the newest.
+          # avro's gap is io-error branches in the OCF writer; tablelog's is the
+          # recovery and conflict paths that need a fault-injecting Store. Both
+          # rise as those are covered - they are floors, not destinations.
           set -u
-          declare -A FLOOR=( [arimax]=99 [memo]=99 [lazy]=100 [stats]=100 [bm25]=100 [avro]=95 )
+          declare -A FLOOR=( [arimax]=99 [memo]=99 [lazy]=100 [stats]=100 [bm25]=100 [avro]=95 [tablelog]=78 )
           fail=0
           for pkg in "${!FLOOR[@]}"; do
             go test -coverprofile="cov-$pkg.out" "./$pkg" >/dev/null

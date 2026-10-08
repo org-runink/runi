@@ -25,8 +25,8 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-6-informational" alt="six packages">
-  <img src="https://img.shields.io/badge/coverage-98.8%25-brightgreen" alt="coverage">
+  <img src="https://img.shields.io/badge/packages-7-informational" alt="seven packages">
+  <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
 
@@ -45,6 +45,7 @@ go get github.com/org-runink/runi
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
+| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 79.1% |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
 
@@ -308,6 +309,46 @@ the OCF sync marker only proves where a block ended. A bit flip inside a block
 therefore changes record values silently. There is a test in this package that
 pins that behaviour. If record integrity matters to you, add a digest over the
 file and check it on read.
+
+---
+
+## `runi/tablelog` — versioned tables on any object store
+
+An append-only, versioned key/value table that lives entirely on object storage.
+**No database process.** A table is a set of immutable Avro data files plus a
+transaction log, and the only coordination primitive it needs is an atomic
+create.
+
+```go
+tb, _ := tablelog.Open(store, "acme", "events")
+v, _ := tb.Put(ctx, tablelog.Row{Key: "a", Payload: []byte("hello")})
+rec, ok, _ := tb.Get(ctx, "a")
+
+snap, _ := tb.Snapshot(ctx, v)      // read the table as it was at version v
+chg, _ := snap.ChangesSince(ctx, "", 3)
+```
+
+**Why it exists.** Agent state, audit trails and application metadata all want
+the same three things: every version kept, reads that do not need a server, and
+no operational database to run. This is the Delta/Iceberg pattern scaled down
+to that job — and the pattern is theirs, not ours.
+
+**Time travel is the point.** `Snapshot(v)` reads the table as of any retained
+version, so "what did the agent believe when it made that call?" is a query
+rather than an archaeology project.
+
+**It works on anything with an atomic create.** [`Store`](#) is a five-method
+interface — S3, GCS, MinIO, a filesystem, your own service. [`MemStore`] is a
+complete in-memory implementation, which is both the reference and enough to
+run a table in a test with no infrastructure at all.
+
+**tablelog does not encrypt anything.** Whether objects are sealed at rest is a
+property of the Store you supply. If you do seal them, bind the ciphertext to
+the object's **key** — keys here encode tenant, table and path, so a data file
+copied into another tenant's prefix then fails to open instead of being served.
+
+**What it is not:** no joins, no multi-table transactions, no secondary indexes,
+no uniqueness constraints. It is a versioned table, not a database.
 
 ---
 
@@ -633,7 +674,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **98.8%** of statements overall; `stats`, `bm25` and `lazy` at 100%. Floors are enforced **per package**, so a strong package cannot pay for a weak one. The four uncovered lines are listed above, with the reason each is unreachable |
+| **Test coverage** | **92.2%** of statements overall; `stats`, `bm25` and `lazy` at 100%. Floors are enforced **per package**, so a strong package cannot pay for a weak one. `avro` and `tablelog` are newest and carry the lowest floors |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
