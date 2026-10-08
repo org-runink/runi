@@ -54,16 +54,26 @@ jobs:
           fi
       - name: coverage must not regress
         run: |
-          go test -coverprofile=coverage.out ./arimax ./memo ./lazy ./stats ./bm25
-          go tool cover -func=coverage.out | tail -1
-          # A floor, not a target. It exists so a change that drops a tested
-          # branch fails here rather than being noticed months later. Raise it
-          # when coverage genuinely rises; never lower it to make a build pass.
-          total=$(go tool cover -func=coverage.out | tail -1 | grep -oE '[0-9.]+%' | tr -d '%')
-          floor=99.5
-          echo "total coverage ${total}% (floor ${floor}%)"
-          awk -v t="$total" -v f="$floor" 'BEGIN { if (t+0 < f+0) { exit 1 } }' || {
-            echo "::error::coverage ${total}% is below the ${floor}% floor"; exit 1; }
+          # PER-PACKAGE floors, not one module-wide number. A single total lets a
+          # strong package's coverage pay for a weak one's: adding a package at
+          # 95% would silently permit arimax to fall to 95% too. These are floors,
+          # not targets. Raise one when its coverage genuinely rises; never lower
+          # one to make a build pass.
+          #
+          # avro's floor is the lowest because it is the newest: its remaining gap
+          # is io-error branches in the OCF writer. It rises as those are covered.
+          set -u
+          declare -A FLOOR=( [arimax]=99 [memo]=99 [lazy]=100 [stats]=100 [bm25]=100 [avro]=95 )
+          fail=0
+          for pkg in "${!FLOOR[@]}"; do
+            go test -coverprofile="cov-$pkg.out" "./$pkg" >/dev/null
+            got=$(go tool cover -func="cov-$pkg.out" | tail -1 | grep -oE '[0-9.]+%' | tr -d '%')
+            floor=${FLOOR[$pkg]}
+            printf '%-8s %6s%%  (floor %s%%)\n' "$pkg" "$got" "$floor"
+            awk -v g="$got" -v f="$floor" 'BEGIN{ exit (g+0 < f+0) }' || {
+              echo "::error::$pkg coverage ${got}% is below its ${floor}% floor"; fail=1; }
+          done
+          exit "$fail"
       - name: ZERO dependencies is a guarantee, not an aspiration
         run: |
           set -u

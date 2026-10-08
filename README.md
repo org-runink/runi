@@ -25,8 +25,8 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-5-informational" alt="five packages">
-  <img src="https://img.shields.io/badge/coverage-99.6%25-brightgreen" alt="coverage">
+  <img src="https://img.shields.io/badge/packages-6-informational" alt="six packages">
+  <img src="https://img.shields.io/badge/coverage-98.8%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
 
@@ -44,6 +44,7 @@ go get github.com/org-runink/runi
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, without leaking the test set | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
+| [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
 
@@ -75,6 +76,7 @@ you are still the one doing the work.
 | 👁️ **the eyes** | [`stats`](#runistats--the-first-ten-minutes) | Look at the flock before doing anything: how many, how spread out, how they move together |
 | 🥽 **the goggles** | [`arimax`](#runiarimax--forecasting-with-external-drivers) | See what is coming — and how far ahead the view can honestly be trusted |
 | 👃 **the nose** | [`bm25`](#runibm25--search-without-a-model) | Find the one you were asked for, by name, among thousands |
+| 📦 **the pack** | [`avro`](#runiavro--apache-avro-without-the-dependency-tree) | Carry it somewhere else, in a format other tools already read |
 | 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 
@@ -270,6 +272,44 @@ intervals covered **97.4%** of realised values over 1,800 held-out points.
 
 82.0% lower RMSE than naive carry-forward. Full tables, and a section on what
 the numbers do **not** show, in [arimax/BENCHMARKS.md](arimax/BENCHMARKS.md).
+
+## `runi/avro` — Apache Avro without the dependency tree
+
+Read and write the Apache Avro binary encoding and Object Container Files, in
+standard-library Go.
+
+```go
+err := avro.WriteOCF(w, schemaJSON, avro.CodecDeflate, records, marshal)
+hdr, records, err := avro.ReadOCF(r, unmarshal)
+```
+
+**Avro is not ours.** It is a format created and maintained by the Apache
+Software Foundation, specified at [avro.apache.org](https://avro.apache.org).
+This is an independent implementation of that public specification — not
+affiliated with, endorsed by, or a product of the ASF, and "Apache Avro" is
+their trademark.
+
+**Why another implementation.** [`hamba/avro`](https://github.com/hamba/avro)
+and [`linkedin/goavro`](https://github.com/linkedin/goavro) are good, cover more
+of the specification, and carry dependencies. This one exists only because the
+rest of this module promises zero of them, and a container format is not worth
+breaking that promise for. **If you already use either of those, keep using
+them.**
+
+**What it does not do**, so you find out here rather than later: no schema
+resolution between a writer's and a reader's schema, no schema registry, no RPC,
+and only the `null` and `deflate` codecs — no snappy, no zstd. If you need
+writer/reader schema evolution this is the wrong tool; it reads a file with the
+schema that file carries.
+
+One property worth knowing because it is a property of the **format**, not of
+this code: Avro's `deflate` codec is raw DEFLATE, which carries no checksum, and
+the OCF sync marker only proves where a block ended. A bit flip inside a block
+therefore changes record values silently. There is a test in this package that
+pins that behaviour. If record integrity matters to you, add a digest over the
+file and check it on read.
+
+---
 
 ## `runi/memo` — memoization with single-flight
 
@@ -565,7 +605,7 @@ not a flaw in `lru_cache`, which never promised single-flight; it is the reason
 
 ### On the coverage figure
 
-`stats`, `bm25` and `lazy` are at 100%. `arimax` is at 99.3% and `memo` at 99.5%, and rather than
+`stats`, `bm25` and `lazy` are at 100%. `arimax` is at 99.3%, `memo` 99.5% and `avro` 95.8% (its gap is io-error branches in the OCF writer, and its CI floor rises as they are covered). Rather than
 write tests that execute a line without asserting anything, here is every
 statement that is not covered and why:
 
@@ -593,7 +633,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **99.6%** of statements overall; `stats`, `bm25` and `lazy` at 100%. The four uncovered lines are listed above, with the reason each is unreachable |
+| **Test coverage** | **98.8%** of statements overall; `stats`, `bm25` and `lazy` at 100%. Floors are enforced **per package**, so a strong package cannot pay for a weak one. The four uncovered lines are listed above, with the reason each is unreachable |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
