@@ -417,8 +417,17 @@ func prefixEnd(p string) (string, bool) {
 
 func randHex(n int) string {
 	b := make([]byte, n)
-	if _, err := rand.Read(b); err != nil {
-		panic("tablelog: crypto/rand: " + err.Error()) // never fails on supported platforms
+	if _, err := randRead(b); err != nil {
+		// Data file names and writer ids must be unpredictable: two writers
+		// that pick the same name overwrite each other's data outside the
+		// commit protocol entirely. There is no safe fallback, so this stops
+		// rather than continuing with a name that might collide.
+		panic("tablelog: crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b)
 }
+
+// randRead supplies the randomness behind data file names and writer ids. It is
+// a variable so a test can make it fail and check that the failure stops the
+// write instead of producing a predictable name.
+var randRead = rand.Read

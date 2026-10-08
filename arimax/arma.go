@@ -49,7 +49,11 @@ func fitARMA(y []float64, p, q int) (*arma, error) {
 	if p < 0 || q < 0 {
 		return nil, errOrder
 	}
-	if len(y) <= p+q+1 {
+	// One more point than there are parameters, so a fit has at least one
+	// degree of freedom left. Fit relies on this rather than restating it:
+	// p + q coefficients fitted to exactly p + q points is interpolation, and
+	// it would report a residual variance of nothing with total confidence.
+	if len(y) <= p+q+2 {
 		return nil, errShort
 	}
 	if p == 0 && q == 0 {

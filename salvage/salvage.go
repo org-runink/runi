@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 )
@@ -15,22 +16,106 @@ var ErrNoJSON = errors.New("salvage: no JSON value in the text decoded into the 
 
 // Candidates returns every top-level balanced JSON object or array in text, in
 // order of appearance. A value nested inside another is part of its enclosing
-// value, not a candidate of its own. Brackets inside JSON strings are ignored,
-// and an opening bracket that is never closed yields nothing.
+// value, not a candidate of its own, and an opening bracket that is never
+// closed yields nothing — not even the values inside it. See Scan if you need
+// to know that the text was cut off.
 //
 // A candidate is balanced, not necessarily valid JSON: Decode checks validity.
 func Candidates(text string) []string {
-	var out []string
-	for i := 0; i < len(text); i++ {
-		if text[i] != '{' && text[i] != '[' {
-			continue
-		}
-		if end := closing(text, i); end > i {
-			out = append(out, text[i:end+1])
-			i = end
-		}
+	vals, _ := Scan(text)
+	if len(vals) == 0 {
+		return nil
+	}
+	out := make([]string, len(vals))
+	for i, v := range vals {
+		out[i] = v.JSON
 	}
 	return out
+}
+
+// Value is one balanced candidate and where it was found, so a caller can
+// report a position or slice the surrounding text.
+type Value struct {
+	JSON  string // the candidate, text[Start:End]
+	Start int    // byte offset of the opening bracket
+	End   int    // byte offset just past the closing bracket
+}
+
+// Scan returns every top-level balanced value in text, and whether the text was
+// truncated: a bracket was opened and never closed.
+//
+// Truncation is reported because it is the one failure that silently produces a
+// WRONG answer rather than no answer. A reply cut off at a token limit leaves
+// its outer object unclosed while the objects nested inside it are complete, so
+// treating those as top-level hands back a fragment that decodes cleanly and
+// means something entirely different from the whole. The case that matters: a
+// reviewer asked for {"findings": [...]} is cut off mid-list, the first finding
+// decodes on its own, its "findings" key is absent, and the caller reads zero
+// findings from a reply that was reporting several. Scan yields nothing for the
+// unclosed region and sets truncated, so a caller can fail closed.
+//
+// Scan is a single pass that honours JSON string literals and escapes and
+// matches brackets by type, so "{"a": [1, 2]}" is one value and a "]" inside an
+// object does not close it.
+func Scan(text string) (vals []Value, truncated bool) {
+	var stack []byte // the open brackets, outermost first
+	start := -1
+	inString, escaped := false, false
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			// A string outside any bracket is not a candidate: Decode tries the
+			// whole text for that. Inside one it is just content.
+			inString = true
+		case '{', '[':
+			if len(stack) == 0 {
+				start = i
+			}
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				// A stray closer. Not truncation — there was nothing to close.
+				continue
+			}
+			want := byte('}')
+			if stack[len(stack)-1] == '[' {
+				want = ']'
+			}
+			if c != want {
+				// Mismatched nesting, as in {"a": [}]}. The document is broken
+				// beyond extraction; abandon the whole region rather than
+				// guessing which bracket was meant.
+				stack = stack[:0]
+				start = -1
+				truncated = true
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 && start >= 0 {
+				vals = append(vals, Value{JSON: text[start : i+1], Start: start, End: i + 1})
+				start = -1
+			}
+		}
+	}
+	// Anything still open at the end was never closed. Its contents are NOT
+	// emitted: see the note above on why that matters.
+	if len(stack) > 0 || inString {
+		truncated = true
+	}
+	return vals, truncated
 }
 
 // First returns the first candidate that is valid JSON, and false if there is
@@ -49,6 +134,75 @@ func First(text string) (string, bool) {
 // Unknown object fields are ignored, as with json.Unmarshal. It returns
 // ErrNoJSON if nothing decodes.
 func Decode(text string, v any) error { return decode(text, v, false) }
+
+// ErrTruncated reports that the text was cut off: a bracket, or a string, was
+// opened and never closed.
+var ErrTruncated = errors.New("salvage: the text is truncated")
+
+// ErrAmbiguous reports that more than one value in the text decoded into the
+// destination, so which one was meant is a guess.
+var ErrAmbiguous = errors.New("salvage: more than one value decodes into the destination")
+
+// DecodeOne is Decode for callers who need the reply to be unambiguous, and it
+// fails closed. It returns ErrTruncated if the text was cut off, ErrAmbiguous
+// if more than one value decodes, and ErrNoJSON if none does.
+//
+// This is the one to reach for when the decoded value drives a decision rather
+// than being shown to someone. A model asked for a verdict and cut off at a
+// token limit, or answering twice, is not a verdict; Decode would hand back the
+// first thing that fits, which is how a truncated review becomes an empty list
+// of findings and reads as approval. Nine call sites that each check those two
+// conditions by hand is the same mistake written nine times, so it is written
+// once, here.
+func DecodeOne(text string, v any) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Pointer || rv.IsNil() {
+		return errors.New("salvage: DecodeOne needs a non-nil pointer")
+	}
+	vals, truncated := Scan(text)
+	if truncated {
+		return ErrTruncated
+	}
+	// The whole text, when it is itself one value, is the unambiguous case.
+	if trimmed := strings.TrimSpace(text); trimmed != "" && decodeOne(trimmed, v, false) == nil {
+		return nil
+	}
+	var matches []string
+	for _, c := range vals {
+		for _, cand := range unwrap(c.JSON) {
+			if decodeOne(cand, v, false) == nil {
+				matches = append(matches, cand)
+				break
+			}
+		}
+	}
+	switch len(matches) {
+	case 0:
+		return ErrNoJSON
+	case 1:
+		return decodeOne(matches[0], v, false)
+	default:
+		return fmt.Errorf("%w: %d of them", ErrAmbiguous, len(matches))
+	}
+}
+
+// unwrap yields a candidate and, when it is an array holding exactly one
+// object, that object too. Models asked for an object routinely return it
+// wrapped in a list of one, and a caller who asked for an object should not
+// have to own a second type to read it. More than one element is left alone:
+// picking from a list is a choice, not an unwrapping.
+func unwrap(c string) []string {
+	out := []string{c}
+	t := strings.TrimSpace(c)
+	if !strings.HasPrefix(t, "[") {
+		return out
+	}
+	var raw []json.RawMessage
+	if err := json.Unmarshal([]byte(t), &raw); err != nil || len(raw) != 1 {
+		return out
+	}
+	return append(out, string(raw[0]))
+}
 
 // DecodeStrict is Decode, except a value carrying fields the destination does
 // not have is not a match. Use it when the shape itself is the signal, so a
@@ -98,42 +252,4 @@ func decodeOne(s string, v any, strict bool) error {
 	}
 	dst.Set(fresh.Elem())
 	return nil
-}
-
-// closing returns the index of the bracket that closes the one at start,
-// honouring string literals and escapes, or -1 if it is never closed.
-func closing(s string, start int) int {
-	open := s[start]
-	shut := byte('}')
-	if open == '[' {
-		shut = ']'
-	}
-	depth := 0
-	inString, escaped := false, false
-	for i := start; i < len(s); i++ {
-		c := s[i]
-		if inString {
-			switch {
-			case escaped:
-				escaped = false
-			case c == '\\':
-				escaped = true
-			case c == '"':
-				inString = false
-			}
-			continue
-		}
-		switch c {
-		case '"':
-			inString = true
-		case open:
-			depth++
-		case shut:
-			depth--
-			if depth == 0 {
-				return i
-			}
-		}
-	}
-	return -1
 }

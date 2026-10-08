@@ -157,26 +157,80 @@ func TestThenPropagatesError(t *testing.T) {
 	}
 }
 
-// TestAllRunsConcurrently proves All starts everything before waiting: n values
-// of t each resolve in about t, not n*t.
+// TestAllRunsConcurrently proves All starts everything before waiting.
+//
+// It counts how many values are in flight at once rather than timing the whole
+// thing. The timing version — n values of 80ms must finish in under 160ms —
+// failed on a loaded macOS CI runner that took 203ms, which says nothing about
+// whether All is concurrent and everything about what else was running on the
+// machine. A test that fails when the runner is busy teaches people to press
+// re-run instead of reading it, so it stops being a test.
+//
+// The barrier makes the property exact: each value blocks until all n have
+// started. If All resolved them one at a time this deadlocks rather than
+// running slowly, so the timeout below is a backstop, not the assertion.
 func TestAllRunsConcurrently(t *testing.T) {
-	const (
-		each = 80 * time.Millisecond
-		n    = 5
-	)
+	const n = 5
+
+	var mu sync.Mutex
+	inFlight, peak := 0, 0
+	started := make(chan struct{}, n)
+	release := make(chan struct{})
+
 	vs := make([]*Value[int], n)
 	for i := range vs {
-		vs[i] = New(func(context.Context) (int, error) { time.Sleep(each); return 1, nil })
+		vs[i] = New(func(context.Context) (int, error) {
+			mu.Lock()
+			inFlight++
+			if inFlight > peak {
+				peak = inFlight
+			}
+			mu.Unlock()
+
+			started <- struct{}{}
+			<-release // every value waits for every other to have started
+
+			mu.Lock()
+			inFlight--
+			mu.Unlock()
+			return 1, nil
+		})
 	}
-	start := time.Now()
-	out, err := All(context.Background(), vs...)
-	elapsed := time.Since(start)
-	if err != nil || len(out) != n {
-		t.Fatalf("got %v, %v", out, err)
+
+	done := make(chan error, 1)
+	var out []int
+	go func() {
+		var err error
+		out, err = All(context.Background(), vs...)
+		done <- err
+	}()
+
+	// All n must start before any is allowed to finish.
+	for i := range n {
+		select {
+		case <-started:
+		case <-time.After(10 * time.Second):
+			mu.Lock()
+			p := peak
+			mu.Unlock()
+			t.Fatalf("only %d of %d values started (peak concurrency %d): All is resolving them in sequence", i, n, p)
+		}
 	}
-	t.Logf("%d values of %v each resolved in %v (serial would be %v)", n, each, elapsed.Round(time.Millisecond), n*each)
-	if elapsed > 2*each {
-		t.Errorf("All took %v, expected ~%v — values did not run concurrently", elapsed, each)
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("All: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("All did not return after every value was released")
+	}
+	if len(out) != n {
+		t.Fatalf("got %d values, want %d", len(out), n)
+	}
+	if peak != n {
+		t.Errorf("peak concurrency %d, want %d", peak, n)
 	}
 }
 
