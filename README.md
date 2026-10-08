@@ -617,7 +617,7 @@ would like to feature you.
 
 | Organisation | Packages | What for |
 |---|---|---|
-| **Runink** | `arimax`, `memo`, `lazy` | Forecasting and request-path caching across River and TIDE |
+| **Runink** | `arimax`, `memo`, `lazy` | The team that builds it — see [From the Runink team](#from-the-runink-team) |
 | **Logical Leap** | `arimax`, `memo` | Partner engagement — forecasting and memoization in shared work |
 | _(yours could be here)_ | | |
 
@@ -663,6 +663,27 @@ Issues and pull requests welcome. Two expectations:
 BSD-3-Clause. See [LICENSE](LICENSE).
 
 ---
+
+---
+
+## From the Runink team
+
+`runi` is built by the team behind **[Runink River](https://runink.org/river)**,
+an open-source Linux distribution for data and analytics work. River's
+documentation is at **[runink.org/river](https://runink.org/river)**, and the
+wider docs are at **[docs.runink.org](https://docs.runink.org)**.
+
+These packages came out of building River and the platform around it: the
+problems they solve — forecasting with drivers you already have, not paying
+twice for the same answer, ranking without a model, looking at a column before
+modelling it — are the ones that kept recurring, and the standard library had no
+answer for any of them.
+
+**What this is not:** `runi` is not a component of River, and River does not
+depend on it. They are separate projects from the same team, under separate
+licences — River is its own distribution, `runi` is BSD-3-Clause Go packages you
+can use in anything. If you are here for the Go packages you never need to touch
+River, and vice versa.
 
 ## The family
 
