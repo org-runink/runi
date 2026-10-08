@@ -1,12 +1,16 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-logo.jpg" alt="Runi, the Runink Australian Shepherd, in AR goggles and a tech harness" width="200">
+  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-logo.jpg" alt="Arlo, the Runink Australian Shepherd, wearing the Runi rig: AR goggles and a powered herding harness" width="220">
 </p>
 
 <h1 align="center">runi</h1>
 
 <p align="center">
-  <em>Runi is the Runink Australian Shepherd.<br>
-  She keeps the flock together so nothing has to be rounded up twice.</em>
+  <strong>Arlo does the herding. Runi is the rig he wears to do it.</strong>
+</p>
+
+<p align="center">
+  <em>Goggles to see what is coming. A harness to work close to the metal.<br>
+  Three small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -44,6 +48,39 @@ They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
 limits, and every performance or accuracy claim below has a test that fails when
 it stops being true.
+
+---
+
+## Meet Arlo, and the rig he wears
+
+**Arlo** is Runink's Australian Shepherd. Herding is what he is for: keep the
+flock moving in one direction, notice the one that has wandered, and do it
+without being told twice.
+
+**Runi** is his rig — the goggles and the powered harness in the artwork above.
+It does not do the herding. It makes the herder better at it: he sees further,
+remembers the ground he has already covered, and can work right down among the
+machinery without slowing down.
+
+That is the whole design brief for these packages. They are **equipment, not a
+framework.** Nothing here takes over your program's structure, starts a
+goroutine you did not ask for, or reaches the network. You put the gear on, and
+you are still the one doing the work.
+
+| The gear | The package | What it gives you |
+|---|---|---|
+| 🥽 **the goggles** | [`arimax`](#runiarimax--forecasting-with-external-drivers) | See what is coming — and how far ahead the view can honestly be trusted |
+| 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
+| ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
+
+<p align="center">
+  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
+</p>
+
+<p align="center">
+  <em>Runink's mascot is a working dog, not a logo.<br>
+  These packages are built the same way: measured, documented, and honest about their limits.</em>
+</p>
 
 ---
 
@@ -341,25 +378,23 @@ BSD-3-Clause. See [LICENSE](LICENSE).
 
 ## The family
 
-`runi` is the shared Go toolkit behind Runink's products. The names follow the
-water:
+`runi` is the shared Go toolkit behind Runink's products. The product names
+follow the water; the mascot and his rig do not.
 
 | | |
 |---|---|
 | **Runink River** | the operating system |
 | **Runink TIDE** | the console and control plane |
 | **runi** | the Go packages both of them are built on |
+| **Arlo** | Runink's Australian Shepherd, and the one doing the work |
+| **Runi** | the goggles and harness Arlo wears — the gear these packages are named for |
 
 ## Artwork and marks
 
-<p align="center">
-  <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Runi running through a neon-lit street in the rain" width="760">
-</p>
-
-Runi, the Runink logo and the Runink marks are held by **Runink** and are **not**
-covered by this repository's BSD-3-Clause licence. The code is yours to use; the
-artwork is not. Detail, and what you may do in a fork, in
-[TRADEMARKS.md](TRADEMARKS.md).
+**Arlo**, the **Runi** rig, the Runink logo and the Runink marks are held by
+**Runink** and are **not** covered by this repository's BSD-3-Clause licence. The
+code is yours to use; the artwork is not. Detail, and what you may do in a fork,
+in [TRADEMARKS.md](TRADEMARKS.md).
 
 This project is not affiliated with or endorsed by Google. "Go" and the Go logo
 are trademarks of Google LLC.

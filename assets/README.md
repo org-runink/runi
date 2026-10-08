@@ -2,12 +2,13 @@
 
 | File | Size | Use |
 |---|---|---|
-| `runi-logo.jpg` | 1024×1024 | the mark — README header at 200px, favicon source, avatars |
-| `runi-wallpaper.jpg` | 1376×768 | landscape banner, desktop wallpaper, slide backgrounds |
+| `runi-logo.jpg` | 1024×1024 | the mark — Arlo in the Runi rig; README header at 220px, favicon source, avatars |
+| `runi-wallpaper.jpg` | 1376×768 | Arlo at work in the rain; landscape banner, wallpaper, slide and social backgrounds |
 
-Runi is the Runink Australian Shepherd and the project's namesake: she keeps the
-flock together so nothing has to be rounded up twice, which is what these
-packages do.
+**Arlo** is Runink's Australian Shepherd. **Runi** is the rig he wears — the AR
+goggles and the powered harness, labelled RUNI on the harness strap in both
+images. The gear is the project's namesake: it does not do the herding, it makes
+the herder better at it, which is what these packages are for.
 
 All rights reserved — see [TRADEMARKS.md](../TRADEMARKS.md). The code is
 BSD-3-Clause; this artwork is not.

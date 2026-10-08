@@ -5,10 +5,10 @@ and artwork** are not covered by that licence.
 
 ## The Runink marks
 
-"Runink", the Runink logo, and **Runi** — the Australian Shepherd in
+"Runink", the Runink logo, **Arlo** — the Australian Shepherd depicted in
 [`assets/runi-logo.jpg`](assets/runi-logo.jpg) and
-[`assets/runi-wallpaper.jpg`](assets/runi-wallpaper.jpg) — are held by
-**Runink**. No licence in this repository grants any right to use them. They are
+[`assets/runi-wallpaper.jpg`](assets/runi-wallpaper.jpg) — and **Runi**, the
+goggles-and-harness rig he wears in both, are held by **Runink**. No licence in this repository grants any right to use them. They are
 here so a reader can tell this is the project's own release, the same reason the
 Runink River project states for its marks.
 
@@ -38,5 +38,5 @@ artwork.
 | Asset | Licence | Reuse |
 |---|---|---|
 | All Go source, tests, docs | BSD-3-Clause | yes, freely |
-| Runi, the Runink logo, the wallpaper | all rights reserved | no |
+| Arlo, the Runi rig, the Runink logo, the wallpaper | all rights reserved | no |
 | "Runink", "Runink River", "Runink TIDE" | trademarks of Runink | no |
