@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/coverage-87.0%25%20%7C%2082.4%25%20%7C%2093.1%25-brightgreen" alt="coverage">
+  <img src="https://img.shields.io/badge/coverage-99.3%25%20%7C%2099.5%25%20%7C%20100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
 
@@ -40,9 +40,9 @@ go get github.com/org-runink/runi
 
 | Package | One line | Coverage |
 |---|---|---|
-| [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 87.0% |
-| [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 82.4% |
-| [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 93.1% |
+| [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
+| [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
+| [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | 100% |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -403,6 +403,23 @@ not a flaw in `lru_cache`, which never promised single-flight; it is the reason
 - **Synthetic data.** Correct for measuring estimator bias against a known
   truth, and *not* evidence about either library's accuracy on real series.
 
+### On the coverage figure
+
+`lazy` is at 100%. `arimax` is at 99.3% and `memo` at 99.5%, and rather than
+write tests that execute a line without asserting anything, here is every
+statement that is not covered and why:
+
+| Where | What it is | Why no test |
+|---|---|---|
+| `memo/memo.go:219` | `if back == nil { break }` inside the eviction loop | The loop only runs while `len(entries) > Capacity`, so the LRU list cannot be empty. Unreachable by construction; kept so a future refactor cannot spin forever |
+| `arimax/acf.go:68` | Durbin–Levinson bails when the denominator falls below 1e-300 | Requires an autocorrelation structure that is numerically degenerate but not constant. Reachable in principle, not constructible without writing the pathological input by hand |
+| `arimax/linalg.go:54` | Householder reflector skipped when `vnorm < 1e-300` | Same: a column that is collinear to within denormal precision |
+| `arimax/arimax.go:87` | `Fit` returning a `fitARMA` error | `Fit`'s own length guard is stricter than `fitARMA`'s, so by the time it is called the error cannot occur. Kept because the two guards are in different files and could drift |
+
+All four are defensive guards against a future change, which is exactly the code
+that should exist and should not be chased with a synthetic test. A test that
+forces an unreachable branch tests the test, not the code.
+
 ## Assurance
 
 For teams with a procurement or compliance review. Everything below is
@@ -416,6 +433,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
+| **Test coverage** | **99.3% / 99.5% / 100%** of statements (arimax / memo / lazy). The four uncovered lines are listed above, with the reason each is unreachable |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -439,6 +457,8 @@ would like to feature you.
 
 | Organisation | Packages | What for |
 |---|---|---|
+| **Runink** | `arimax`, `memo`, `lazy` | Forecasting and request-path caching across River and TIDE |
+| **Logical Leap** | `arimax`, `memo` | Partner engagement — forecasting and memoization in shared work |
 | _(yours could be here)_ | | |
 
 **To be added:** open a pull request adding a row, or [open an issue](https://github.com/org-runink/runi/issues/new)
