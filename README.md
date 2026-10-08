@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-7-informational" alt="seven packages">
+  <img src="https://img.shields.io/badge/packages-8-informational" alt="eight packages">
   <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -44,6 +44,7 @@ go get github.com/org-runink/runi
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, without leaking the test set | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | 99.3% |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
+| [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | 95.8% |
 | [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 79.1% |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | 99.5% |
@@ -77,6 +78,7 @@ you are still the one doing the work.
 | 👁️ **the eyes** | [`stats`](#runistats--the-first-ten-minutes) | Look at the flock before doing anything: how many, how spread out, how they move together |
 | 🥽 **the goggles** | [`arimax`](#runiarimax--forecasting-with-external-drivers) | See what is coming — and how far ahead the view can honestly be trusted |
 | 👃 **the nose** | [`bm25`](#runibm25--search-without-a-model) | Find the one you were asked for, by name, among thousands |
+| 🦴 **the mouth** | [`salvage`](#runisalvage--json-out-of-a-models-reply) | Bring back exactly what was asked for, and drop what was not |
 | 📦 **the pack** | [`avro`](#runiavro--apache-avro-without-the-dependency-tree) | Carry it somewhere else, in a format other tools already read |
 | 🧠 **the memory core** | [`memo`](#runimemo--memoization-with-single-flight) | Never chase the same thing twice, even when sixty callers ask at once |
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
@@ -244,6 +246,36 @@ Two details worth knowing: the IDF uses the `+1` smoothing, so a term appearing
 in most documents can never drive a score **negative** the way the textbook form
 can; and scores are only comparable **within one query**, so rank and cut by
 position rather than by a threshold.
+
+---
+
+## `runi/salvage` — JSON out of a model's reply
+
+Ask a language model for a JSON object and you mostly get one, wrapped in
+something: a code fence, "Sure! Here is the analysis:", a closing remark, or
+two objects where you asked for one. `encoding/json` rightly refuses all of it,
+and the usual fix — a regular expression from the first `{` to the last `}` —
+breaks the moment the prose or a string contains a brace.
+
+```go
+var a Analysis
+if err := salvage.Decode(reply, &a); err != nil {
+	// nothing in the reply decoded as an Analysis — ask again
+}
+```
+
+`Decode` scans the reply once, honouring string literals and escapes, and tries
+the whole text and then each top-level object or array in order, stopping at the
+first that decodes into your type. A value that does not fit is skipped, never
+half-applied. `DecodeStrict` also skips values carrying fields your type does not
+have, for when the shape itself is the signal. `Candidates` gives you the raw
+values if you would rather choose.
+
+**It extracts; it never repairs.** Trailing commas, single quotes, comments and
+replies cut off mid-object are not fixed: a "repaired" document is a guess about
+what the model meant, and a plausible guess that decodes is worse than an honest
+failure. A value that decodes is well-formed, not correct — validate it. Fuzzed:
+millions of arbitrary inputs, no panic, every candidate a balanced substring.
 
 ---
 
