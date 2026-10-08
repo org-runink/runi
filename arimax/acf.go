@@ -5,6 +5,11 @@ import "math"
 // ACF returns the sample autocorrelation function of y for lags 0..maxLag.
 // The value at index 0 is always 1. Use it to read the moving-average order:
 // an MA(q) series has an ACF that cuts off after lag q.
+//
+// A constant series has zero variance, so every autocorrelation beyond lag 0 is
+// 0/0 and undefined. Rather than return NaNs, ACF reports lag 0 as 1 — which is
+// true by definition and keeps the documented contract — and every later lag as
+// 0, which reads as "no structure" to the order-selection it feeds.
 func ACF(y []float64, maxLag int) []float64 {
 	n := len(y)
 	if n == 0 || maxLag < 0 {
@@ -21,6 +26,8 @@ func ACF(y []float64, maxLag int) []float64 {
 	}
 	out := make([]float64, maxLag+1)
 	if c0 == 0 {
+		// Constant series: lag 0 is 1 by definition, the rest stay 0.
+		out[0] = 1
 		return out
 	}
 	for k := 0; k <= maxLag; k++ {
