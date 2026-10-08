@@ -732,12 +732,60 @@ test — if you add randomness, do the same.
 
 ## Contributing
 
-Issues and pull requests welcome. Two expectations:
+Issues and pull requests welcome.
 
-1. **No dependencies.** It is why these are usable in a CLI, a sidecar, a WASM
-   build or on a device. A PR adding a `require` line needs a strong argument.
-2. **Claims need a test.** If you state an accuracy or performance property,
-   there must be a test that fails when it stops holding.
+### What belongs here
+
+A package belongs in `runi` if it is **a primitive someone reaches for while
+doing data work, which the standard library does not provide.** That is the
+whole rule, and it is deliberately narrow.
+
+The risk a module like this faces is not being too small. It is becoming a
+drawer — a pile of useful-but-unrelated code that nobody can describe in a
+sentence, and that therefore nobody adopts. Every package added makes the next
+one easier to justify and the module harder to explain.
+
+So before proposing one, answer two questions in the PR:
+
+- **Who reaches for this, and in the same hour they reach for another package
+  here?** `stats` and `arimax` share a user. A package serving a different
+  audience entirely may be excellent and still belong in its own module.
+- **Would a reader be surprised to find it here?** Surprise is the signal that
+  the module's description has stopped being true.
+
+A good package that does not fit is not a rejection. It is a module of its own,
+and it will do better with a name that describes it.
+
+### The bar
+
+1. **Zero dependencies.** It is why these work in a CLI, a sidecar, a WASM build
+   or on a device. CI fails the build if a `require` line appears, and the check
+   feeds itself a known dependency to prove it can still detect one. A PR adding
+   a dependency needs an argument strong enough to change the module's identity.
+2. **Claims need a test.** State an accuracy or performance property and there
+   must be a test that fails when it stops holding. A benchmark number in a
+   README with no test behind it is decoration.
+3. **A coverage floor, in CI, per package.** Floors are per package rather than
+   module-wide, so a strong package cannot pay for a weak one. Set yours at the
+   level the PR actually reaches and raise it later — a floor you have to lower
+   is worse than one that started honest.
+4. **Document what it does NOT do.** Every package here has that section, and it
+   is the most useful part. A user who finds the limit in your docs is a user;
+   one who finds it in production is a former user.
+5. **Public-clean.** No internal paths, service names, infrastructure details or
+   security posture. A public commit is a publication. If a comment explains a
+   limitation by describing where *we* have not fixed something, rewrite it to
+   tell the reader what *they* should do.
+6. **Prove a check can fail.** If you add a guard, feed it a violation and show
+   it is caught. A green that could not have gone red is worth less than none.
+
+### Adding a package
+
+- `doc.go` or a package comment that says what it is, what it is not, and when
+  to use something else — including naming the better alternative if one exists.
+- Tests, with the floor added to `.github/workflows/ci.yml`.
+- A README section following the existing shape.
+- An entry in the package table and the gear table.
 
 ## Licence
 
