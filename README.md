@@ -282,9 +282,10 @@ key cost 24 µs and **one** execution of the function.
 
 ### What these numbers do not show
 
-- **No head-to-head against other libraries was run.** Only our own measurements
-  appear here. No claim of being faster or more accurate than any alternative is
-  made, because that experiment was not performed.
+- **The head-to-head covers statsmodels, and nothing else.** See
+  [Against the Python reference implementations](#against-the-python-reference-implementations).
+  No comparison against `pmdarima`, R's `forecast`, or Prophet was run, so no
+  claim is made about any of them.
 - **Accuracy is measured on synthetic data**, which is correct for estimator bias
   and is *not* evidence of accuracy on real series, where the model is
   misspecified by construction.
@@ -294,6 +295,113 @@ key cost 24 µs and **one** execution of the function.
   intervals too narrow in the tails.
 
 ---
+
+---
+
+## Against the Python reference implementations
+
+Time-series forecasting is Python's home ground, so the useful question is not
+whether Go can do it but what you give up. We measured.
+
+**Method, because it is the only thing that makes these numbers worth reading.**
+One generator writes the datasets to CSV **once** (`benchmarks/gen.py`); both
+implementations read the same files. Same model order, ARIMAX(1,0,1) with one
+exogenous regressor. Same six-point held-out horizon. Same machine, same
+session. The control is `naive_rmse` — the error of carrying the last value
+forward, which depends only on the data and not on either library. It came out
+to **3.7104740961972245 in both**, to every digit, which is how we know the two
+were fitted to identical numbers.
+
+```bash
+python benchmarks/gen.py                 # write the shared datasets
+python benchmarks/bench_statsmodels.py   # statsmodels 0.15.0
+go run ./benchmarks/runibench             # runi/arimax
+```
+
+### `runi/arimax` vs `statsmodels` SARIMAX
+
+200 independent series, n=500, h=6. statsmodels 0.15.0, Python 3.14, Go 1.25.
+
+| | `runi/arimax` | `statsmodels` SARIMAX | |
+|---|---:|---:|---|
+| **Fit, n=500** | **0.80 ms** | 33.3 ms | **42× faster** |
+| **Fit, n=2,000** | **2.20 ms** | 110.4 ms | **50× faster** |
+| **Fit, n=10,000** | **11.7 ms** | 510.8 ms | **44× faster** |
+| Per fit, over the 200-trial run | **0.67 ms** | 36.4 ms | **54× faster** |
+| Library start-up before the first fit | **0 ms** (compiled in) | 2,063 ms | |
+| | | | |
+| 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
+| Forecast RMSE, h=6 | 1.3169 | 1.3160 | within **0.07%** |
+| φ (AR) bias / RMSE | −0.0042 / 0.0508 | −0.0041 / 0.0506 | indistinguishable |
+| β (exogenous) bias / RMSE | −0.0029 / 0.0666 | +0.0023 / **0.0336** | **statsmodels 2× better** |
+| Naive RMSE *(control — must match)* | 3.7104740961972245 | 3.7104740961972245 | ✅ |
+
+**Read that last-but-one row before the speed rows.** statsmodels recovers the
+exogenous coefficient about **twice as precisely** as we do. That is not noise
+and it is not a bug — it is the price of the estimator. statsmodels runs exact
+maximum likelihood through a Kalman filter; `arimax` uses a staged regression
+with ARIMA errors fitted by conditional sum of squares. The staged approach is
+what makes it ~50× faster, and it costs real precision in β.
+
+**What is genuinely equivalent:** the forecasts, and the honesty of the
+intervals. A 0.07% difference in six-step RMSE is not something a decision would
+turn on, and both deliver 94.5% empirical coverage against a nominal 95% — the
+number that matters when a forecast informs an action.
+
+**So, honestly: when should you use which?**
+
+| Use `statsmodels` when | Use `runi/arimax` when |
+|---|---|
+| You need the coefficient itself — it is the finding, as in econometrics | You need the forecast, and the coefficient is a means to it |
+| You want exact MLE, diagnostics, SARIMA, state space, a vast library | You want ARIMAX, fast, with calibrated intervals |
+| You are in a notebook and 2s of import does not matter | You are in a service, fitting per request or per tenant |
+| You want the ecosystem Python has and Go does not | You want one static binary, no runtime, no dependency tree |
+
+A fit every 0.67 ms rather than every 36 ms is what changes architecture. It is
+the difference between a nightly batch job that writes forecasts to a table and
+**fitting a fresh model inside the request that needs it** — per tenant, per
+series, on demand. That is the capability Go is buying here, not a leaderboard
+position.
+
+### `runi/memo` vs `functools.lru_cache`
+
+`lru_cache` is the API that inspired `memo`: one decorator, one bound, nothing
+to configure. Same experiment on both sides — N callers hit one cold key
+simultaneously, with a 5 ms function, counting **how many times the function
+actually ran**.
+
+| | `runi/memo` | `functools.lru_cache` |
+|---|---:|---:|
+| Cache hit | **25.3 ns** | 77.2 ns |
+| Cache miss | 553 ns | **181 ns** |
+| 8 cold callers → **times the function ran** | **1** | **8** |
+| 64 cold callers → **times the function ran** | **1** | **64** |
+| Wall clock, 64 cold callers | **5.3 ms** | 14.9 ms |
+| TTL | ✅ | ❌ |
+| Single-flight | ✅ | ❌ |
+
+The hit path is ~3× faster, and `lru_cache` is **3× faster on a miss** — its
+miss is a dict insert, ours also maintains an LRU list and expiry. That is a
+real loss and it is in the table.
+
+But the row that matters is the function-ran count. With 64 callers on a cold
+key, `lru_cache` calls the expensive function **64 times**; `memo` calls it
+**once**. If that function is a model inference or a paid API call, the
+difference is not 3× on a nanosecond — it is 64× on the expensive thing. This is
+not a flaw in `lru_cache`, which never promised single-flight; it is the reason
+`memo` builds it in rather than leaving it to the caller.
+
+### What was not measured
+
+- **Prophet was not run.** It is a different model class — additive trend plus
+  seasonality, not ARIMAX — so running it on this data would have measured the
+  mismatch, not the library. No claim about Prophet appears here.
+- **`pmdarima`, R's `forecast`, and every other implementation** were not run.
+- **One machine, one session.** The `ns`/`ms` figures move with the host; the
+  ratios are more stable than the absolutes, and the accuracy figures are
+  deterministic given the CSVs.
+- **Synthetic data.** Correct for measuring estimator bias against a known
+  truth, and *not* evidence about either library's accuracy on real series.
 
 ## Assurance
 

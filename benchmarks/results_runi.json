@@ -1,0 +1,33 @@
+{
+  "accuracy": {
+    "trials": 200,
+    "seconds_total": 0.133953954,
+    "seconds_per_fit": 0.0006697697699999999,
+    "beta_bias": -0.002933912102806393,
+    "beta_rmse": 0.06661752556113502,
+    "phi_bias": -0.0041855719391878324,
+    "phi_rmse": 0.05083732177890621,
+    "coverage_pct": 94.5,
+    "coverage_points": 1200,
+    "forecast_rmse": 1.316936345275634,
+    "naive_rmse": 3.7104740961972245
+  },
+  "estimator": "staged regression with ARIMA errors, conditional sum of squares",
+  "import_seconds": 0,
+  "library": "runi/arimax",
+  "timing": {
+    "10000": {
+      "reps": 3,
+      "seconds_median": 0.011748432
+    },
+    "2000": {
+      "reps": 10,
+      "seconds_median": 0.002201111
+    },
+    "500": {
+      "reps": 10,
+      "seconds_median": 0.000796229
+    }
+  },
+  "version": "v0.1.7"
+}

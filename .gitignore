@@ -1,2 +1,6 @@
 *.test
 *.out
+
+# Benchmark datasets are generated, not stored: benchmarks/gen.py writes them.
+# They are ~2.8MB and would ship in every module zip.
+benchmarks/data/

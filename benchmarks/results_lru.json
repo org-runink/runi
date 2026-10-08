@@ -1,0 +1,19 @@
+{
+  "library": "python functools.lru_cache",
+  "python": "3.14.7",
+  "hit_ns": 77.23498,
+  "miss_ns": 180.94568,
+  "stampede_8": {
+    "wall_seconds": 0.008309178985655308,
+    "function_ran_times": 8,
+    "callers": 8
+  },
+  "stampede_64": {
+    "wall_seconds": 0.014929602039046586,
+    "function_ran_times": 64,
+    "callers": 64
+  },
+  "has_ttl": false,
+  "has_single_flight": false,
+  "work_ms": 5
+}

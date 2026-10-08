@@ -1,0 +1,33 @@
+{
+  "library": "statsmodels",
+  "version": "0.15.0",
+  "estimator": "exact MLE via Kalman filter (SARIMAX default)",
+  "import_seconds": 2.062642237986438,
+  "accuracy": {
+    "trials": 200,
+    "seconds_total": 7.279467758024111,
+    "seconds_per_fit": 0.036397338790120554,
+    "beta_bias": 0.0022876605441899713,
+    "beta_rmse": 0.033605696994027094,
+    "phi_bias": -0.004065701267029039,
+    "phi_rmse": 0.05062081361153975,
+    "coverage_pct": 94.5,
+    "coverage_points": 1200,
+    "forecast_rmse": 1.31601206983942,
+    "naive_rmse": 3.710474096197225
+  },
+  "timing": {
+    "500": {
+      "seconds_median": 0.03332866047276184,
+      "reps": 10
+    },
+    "2000": {
+      "seconds_median": 0.11042345396708697,
+      "reps": 10
+    },
+    "10000": {
+      "seconds_median": 0.5108345659682527,
+      "reps": 3
+    }
+  }
+}

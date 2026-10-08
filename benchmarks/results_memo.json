@@ -1,0 +1,19 @@
+{
+  "go": "go1.27.1-X:nodwarf5",
+  "has_single_flight": true,
+  "has_ttl": true,
+  "hit_ns": 25.289185,
+  "library": "runi/memo",
+  "miss_ns": 553.10748,
+  "stampede_64": {
+    "callers": 64,
+    "wall_seconds": 0.005329613,
+    "function_ran_times": 1
+  },
+  "stampede_8": {
+    "callers": 8,
+    "wall_seconds": 0.005856014,
+    "function_ran_times": 1
+  },
+  "work_ms": 5
+}
