@@ -139,8 +139,12 @@ func BenjaminiHochberg(p []float64, alpha float64) (q []float64, reject []bool) 
 // TrendTest is an ordinary-least-squares slope of a series against its index,
 // with the test of that slope against zero.
 type TrendTest struct {
-	Slope  float64 `json:"slope"`
-	StdErr float64 `json:"std_err"` // standard error of the slope; 0 when undefined
+	Slope float64 `json:"slope"`
+	// StdErr is the standard error of the slope. It is 0 when there is no
+	// residual variance to estimate it from — too few points, or an exact
+	// line — and NaN when the series contains one, because a missing value
+	// makes the spread genuinely unknown rather than zero. See Trend.
+	StdErr float64 `json:"std_err"`
 	T      float64 `json:"t"`
 	P      float64 `json:"p"` // two-sided p-value against slope = 0, n-2 df
 	N      int     `json:"n"`
@@ -159,6 +163,14 @@ func (t TrendTest) Falling(alpha float64) bool { return t.Slope < 0 && t.P <= al
 // A slope is never "rising" just because it is not exactly zero: on noise the
 // fitted slope is essentially never zero. Use Rising and Falling, which ask
 // the test.
+//
+// A NaN anywhere in y propagates: Slope, StdErr and T come back NaN and P
+// comes back 1, so Rising and Falling are both false. Trend does not drop or
+// interpolate missing values, because which of those is right depends on what
+// the gap means, and it is not a decision this function can make for the
+// caller. Clean the series first, or check the result with
+// math.IsNaN. The one thing Trend will not do is report a defined standard
+// error for a series it could not measure.
 func Trend(y []float64) TrendTest {
 	n := len(y)
 	out := TrendTest{N: n, P: 1}
