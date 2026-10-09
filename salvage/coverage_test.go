@@ -147,3 +147,54 @@ func TestDecodeOneUnwrapsASingletonArray(t *testing.T) {
 		t.Errorf("list = %v", list)
 	}
 }
+
+// DecodeOne promises the destination is untouched on every error path, and the
+// ambiguous case used to break that promise: counting how many candidates fit
+// was done by decoding each into the destination, so the last one that fitted
+// stayed there. A caller who got ErrAmbiguous and did not zero its own
+// variable would then read a value DecodeOne had explicitly refused to choose
+// between — the exact failure DecodeOne exists to prevent, reintroduced by the
+// check for it. Reported by TIDE against v0.7.0.
+//
+// The destination is PRE-FILLED here. Asserting that a zero value stayed zero
+// would pass whether or not anything was written, which is a test that cannot
+// fail.
+func TestDecodeOneLeavesTheDestinationAloneOnEveryError(t *testing.T) {
+	type verdict struct {
+		Findings []string `json:"findings"`
+		Note     string   `json:"note"`
+	}
+	sentinel := verdict{Findings: []string{"untouched"}, Note: "untouched"}
+
+	for _, c := range []struct {
+		name string
+		text string
+		want error
+	}{
+		{"ambiguous", `{"findings":["a"]} and later {"findings":["b","c"]}`, ErrAmbiguous},
+		{"truncated", `{"findings": [{"file":"a.go"}`, ErrTruncated},
+		{"no json", `nothing here`, ErrNoJSON},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			got := sentinel
+			got.Findings = append([]string(nil), sentinel.Findings...)
+			err := DecodeOne(c.text, &got)
+			if !errors.Is(err, c.want) {
+				t.Fatalf("err = %v, want %v", err, c.want)
+			}
+			if got.Note != "untouched" || len(got.Findings) != 1 || got.Findings[0] != "untouched" {
+				t.Errorf("destination was written on %v: %+v", c.want, got)
+			}
+		})
+	}
+
+	// And on success it IS written, so the test above is not passing because
+	// DecodeOne never writes anything at all.
+	got := sentinel
+	if err := DecodeOne(`{"findings":["real"],"note":"real"}`, &got); err != nil {
+		t.Fatalf("success case: %v", err)
+	}
+	if got.Note != "real" || len(got.Findings) != 1 || got.Findings[0] != "real" {
+		t.Errorf("success did not write the destination: %+v", got)
+	}
+}
