@@ -259,3 +259,187 @@ func TestPropertyFourierIsPeriodic(t *testing.T) {
 		}
 	}
 }
+
+// Classical must ADD UP too, and it must add up at the ENDS, which is the part
+// that is easy to get wrong: the moving average is undefined there, so the
+// trend is held at the nearest defined value and the difference has to land in
+// the residual. A component set that only sums correctly on the interior would
+// be a decomposition of a shorter series than the caller handed over.
+func TestPropertyClassicalIsExact(t *testing.T) {
+	r := rand.New(rand.NewPCG(97, 98))
+	for i := 0; i < 1000; i++ {
+		p := 2 + r.IntN(29)
+		n := 2*p + r.IntN(300)
+		x := make([]float64, n)
+		for j := range x {
+			x[j] = 100 + 10*math.Sin(float64(j)*2*math.Pi/float64(p)) +
+				0.05*float64(j) + r.NormFloat64()
+		}
+		d, err := Classical(x, p)
+		if err != nil {
+			t.Fatalf("p=%d n=%d: %v", p, n, err)
+		}
+		if d.Period != p || len(d.Trend) != n || len(d.Seasonal) != n || len(d.Residual) != n {
+			t.Fatalf("p=%d n=%d: period %d, lengths %d/%d/%d",
+				p, n, d.Period, len(d.Trend), len(d.Seasonal), len(d.Residual))
+		}
+		if d.Changepoints != nil {
+			t.Fatalf("p=%d: Classical reported changepoints %v", p, d.Changepoints)
+		}
+		if f := d.Forecast(3); f != nil {
+			t.Fatalf("p=%d: Classical produced a forecast %v", p, f)
+		}
+		for j := range x {
+			sum := d.Trend[j] + d.Seasonal[j] + d.Residual[j]
+			if math.Abs(sum-x[j]) > 1e-9*(1+math.Abs(x[j])) {
+				t.Fatalf("p=%d n=%d point %d: components sum to %v, series is %v",
+					p, n, j, sum, x[j])
+			}
+		}
+		// The season carries no level: its mean over one cycle is zero, or the
+		// level has been split between two components and neither is what it
+		// claims to be.
+		mean := 0.0
+		for j := 0; j < p; j++ {
+			mean += d.Seasonal[j]
+		}
+		if math.Abs(mean/float64(p)) > 1e-9 {
+			t.Fatalf("p=%d n=%d: season has mean %v", p, n, mean/float64(p))
+		}
+	}
+}
+
+// No component may be NaN or infinite, on any shape of finite input -- the
+// same bar the least-squares path is held to. The division by a phase count
+// is the risk here: a phase with nothing in it would be 0/0, and the length
+// guard is the only thing standing between that and a NaN season.
+func TestPropertyClassicalNeverNaN(t *testing.T) {
+	r := rand.New(rand.NewPCG(99, 100))
+	for i := 0; i < 2000; i++ {
+		p := 2 + r.IntN(20)
+		n := 2*p + r.IntN(60)
+		x := make([]float64, n)
+		switch r.IntN(5) {
+		case 0: // constant: nothing to split at all
+			c := r.NormFloat64()
+			for j := range x {
+				x[j] = c
+			}
+		case 1: // a perfect ramp
+			for j := range x {
+				x[j] = float64(j)
+			}
+		case 2: // a level shift, which the moving average must smear
+			for j := range x {
+				if j > n/2 {
+					x[j] = 100
+				}
+			}
+		case 3: // holes, which fill must close
+			for j := range x {
+				x[j] = r.NormFloat64()
+				if r.IntN(4) == 0 {
+					x[j] = math.NaN()
+				}
+			}
+		default:
+			for j := range x {
+				x[j] = r.NormFloat64() * 1e6
+			}
+		}
+		d, err := Classical(x, p)
+		if err != nil {
+			continue // refusing is allowed; returning nonsense is not
+		}
+		for j := range x {
+			if math.IsNaN(d.Trend[j]) || math.IsInf(d.Trend[j], 0) ||
+				math.IsNaN(d.Seasonal[j]) || math.IsInf(d.Seasonal[j], 0) ||
+				math.IsNaN(d.Residual[j]) || math.IsInf(d.Residual[j], 0) {
+				t.Fatalf("case %d p=%d n=%d: non-finite component at %d (%v/%v/%v)",
+					i%5, p, n, j, d.Trend[j], d.Seasonal[j], d.Residual[j])
+			}
+		}
+	}
+}
+
+// A planted sine must come back, at every period, with its amplitude. This is
+// exact rather than approximate and the test says so: the centred average of a
+// sinusoid over exactly one of its own periods is zero -- including the
+// half-weighted even-period window, where the two end points are half a cycle
+// apart and cancel -- so the trend of a line plus a sine IS the line, the
+// detrended series IS the sine, and averaging it by phase returns it
+// unchanged. If the window is built wrong by one point, or the even period's
+// half weights are misplaced, the season leaks into the trend and this fails.
+func TestPropertyClassicalRecoversAPlantedSine(t *testing.T) {
+	r := rand.New(rand.NewPCG(101, 102))
+	// From 3: a period-2 sine sampled at integers is identically zero, so
+	// there is no amplitude to recover -- the same Nyquist limit Period has.
+	for p := 3; p <= 40; p++ {
+		n := 8 * p
+		amp := 1 + r.Float64()*50
+		level, slope := r.NormFloat64()*100, r.NormFloat64()
+		x := make([]float64, n)
+		for j := range x {
+			x[j] = level + slope*float64(j) + amp*math.Sin(2*math.Pi*float64(j)/float64(p))
+		}
+		d, err := Classical(x, p)
+		if err != nil {
+			t.Fatalf("p=%d: %v", p, err)
+		}
+		h := p / 2
+		scale := 1 + math.Abs(level) + math.Abs(slope)*float64(n) + amp
+		for j := range x {
+			want := amp * math.Sin(2*math.Pi*float64(j)/float64(p))
+			if got := d.Seasonal[j]; math.Abs(got-want) > 1e-9*scale {
+				t.Fatalf("p=%d amp=%.2f: season[%d] = %v, want %v", p, amp, j, got, want)
+			}
+		}
+		for j := h; j < n-h; j++ {
+			want := level + slope*float64(j)
+			if got := d.Trend[j]; math.Abs(got-want) > 1e-9*scale {
+				t.Fatalf("p=%d: trend[%d] = %v, want the line's %v", p, j, got, want)
+			}
+			if math.Abs(d.Residual[j]) > 1e-9*scale {
+				t.Fatalf("p=%d: residual[%d] = %v, want ~0 on a noiseless series",
+					p, j, d.Residual[j])
+			}
+		}
+	}
+}
+
+// With noise on top, the amplitude is still recovered: the phase average of
+// the noise shrinks as the series covers more cycles. Stated as a property
+// over many draws because a single draw proves nothing about an average.
+func TestPropertyClassicalRecoversAmplitudeUnderNoise(t *testing.T) {
+	r := rand.New(rand.NewPCG(103, 104))
+	for i := 0; i < 200; i++ {
+		p := 6 + r.IntN(20)
+		cycles := 40 + r.IntN(40)
+		n := cycles * p
+		amp := 5 + r.Float64()*20
+		x := make([]float64, n)
+		for j := range x {
+			x[j] = 20 + 0.01*float64(j) + amp*math.Sin(2*math.Pi*float64(j)/float64(p)) +
+				r.NormFloat64()
+		}
+		d, err := Classical(x, p)
+		if err != nil {
+			t.Fatalf("p=%d n=%d: %v", p, n, err)
+		}
+		peak := 0.0
+		for j := 0; j < p; j++ {
+			peak = math.Max(peak, math.Abs(d.Seasonal[j]))
+		}
+		// The recovered peak is amp·cos(pi/p) at worst, because the sine is
+		// sampled at integers and need not be sampled at its own crest; a
+		// period of 6 loses 13% to that alone. Plus the phase average of the
+		// noise, which has standard deviation sigma/sqrt(cycles); six of those
+		// so the bound is about the estimator and not about the draw.
+		slack := 6 / math.Sqrt(float64(cycles))
+		lo, hi := amp*math.Cos(math.Pi/float64(p))-slack, amp+slack
+		if peak < lo || peak > hi {
+			t.Fatalf("p=%d cycles=%d amp=%.2f: recovered peak %.3f, want in [%.3f,%.3f]",
+				p, cycles, amp, peak, lo, hi)
+		}
+	}
+}

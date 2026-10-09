@@ -10,6 +10,12 @@
 // FitFourier models one known season, Changepoints finds trend breaks, and
 // Decompose runs all three together and can extend the result forward.
 //
+// Classical is the second, cheaper entry point, for when the period is already
+// known: the textbook moving-average decomposition, the operation
+// statsmodels.tsa.seasonal.seasonal_decompose performs, computed in one pass.
+// No period detection, no trend breaks, no forecast, and about forty times
+// less work than Decompose.
+//
 // This is not Prophet. Prophet is Meta's forecasting library; it fits a
 // related model with a Bayesian treatment of changepoints, holidays and
 // several seasonalities at once. If you want Prophet, use Prophet. This
@@ -25,7 +31,10 @@
 // fitted to the series as given. A bad day therefore still shows up as a large
 // Residual, where a caller looking for anomalies can find it, instead of being
 // smoothed away. A shift in level that LASTS is a break, not an outlier, and
-// survives the filter.
+// survives the filter. Classical is the one exception, and says so in its own
+// doc: there the moving average IS the estimate, and filtering it would make
+// the result disagree with every other implementation of the classical
+// decomposition.
 //
 // Limits, stated so they are not discovered later:
 //   - One seasonality. A series with both a weekly and a yearly cycle gets the
@@ -35,7 +44,8 @@
 //     and a forecast extends the last line.
 //   - Short series are refused rather than guessed at: Period needs
 //     MinPeriodLength (28) points and two full cycles, Decompose needs 4
-//     points. 28 is not arbitrary — it is the shortest series in which a cycle
+//     points, Classical needs two full cycles of the period it is given. 28 is
+//     not arbitrary — it is the shortest series in which a cycle
 //     can in fact be found, because the bar a lag must clear rises as the
 //     series shortens while the autocorrelation estimator's ceiling falls, and
 //     below 28 the bar sits above the ceiling.
@@ -46,25 +56,30 @@
 //
 // # Measured against statsmodels
 //
-// Decompose is SLOWER than statsmodels.tsa.seasonal.seasonal_decompose at the
-// decomposition itself, and that is the honest headline. Given the same period
-// and with the trend-break search off — the operation seasonal_decompose
-// performs — n=4,000 takes 1.74 ms here against 0.182 ms there, about 9.5x
-// slower: it fits a line and a Fourier series by least squares where
-// seasonal_decompose takes a centred moving average in C loops. If you already
-// know your period and want the classical decomposition, use statsmodels.
+// Classical computes what statsmodels.tsa.seasonal.seasonal_decompose
+// computes, by the same method, and it is FASTER: n=4,000 at period 24 takes
+// 0.0408 ms here against 0.161 ms there, 3.9x faster, with the two agreeing to
+// 2e-13 on a series of magnitude 300 — a few ulps of float64, which is to say
+// they produce the same numbers. That is the like-for-like row, and it is the
+// one to quote.
 //
-// What this package offers is the work seasonal_decompose does not do at all,
-// and the cost of each piece is reported rather than folded into the comparison
-// above:
+// Decompose is SLOWER than seasonal_decompose, and that stays said. Given the
+// same period and with the trend-break search off, n=4,000 takes 1.70 ms here
+// against 0.161 ms there, because it solves two least-squares systems where a
+// moving average takes two additions a point. It is the wrong tool for a
+// decomposition whose period you already know — that is what Classical is for
+// — and the right one for the three things a moving average cannot do at all.
+// Each piece costs what it costs:
 //
-//	period given, no break search      1.74 ms
-//	plus the BIC changepoint search    18.5 ms   (the default)
-//	plus detecting the period too      55.4 ms
-//	Period detection on its own        4.32 ms
+//	Classical, period given             0.0408 ms
+//	Decompose, period given, no breaks  1.70 ms
+//	plus the BIC changepoint search     18.4 ms   (the default)
+//	plus detecting the period too       56.0 ms
+//	Period detection on its own         4.38 ms
 //
 // So: a moving average cannot tell you the period, cannot tell you where the
-// trend broke, and cannot extrapolate. Those three are what the extra time buys.
+// trend broke, and cannot extrapolate. Those three are what the extra time
+// buys, and when you need none of them, Classical is the function.
 //
 // Measured on an ASUS Ascent GX10, 20 cores, aarch64, Go 1.27.2, statsmodels
 // 0.15.0 on Python 3.12.3.
@@ -575,6 +590,170 @@ func (d *Decomposition) Forecast(h int) []float64 {
 		out[i] = last.a + last.b*float64(t-last.start) + d.season.Mean + seasonAt(d.season, t)
 	}
 	return out
+}
+
+// Classical splits x into trend, season and residual by the classical
+// moving-average method, in one pass over the series.
+//
+// It is the textbook decomposition, and it is exactly what
+// statsmodels.tsa.seasonal.seasonal_decompose(x, period=period,
+// model="additive") computes: a centred moving average over one period is the
+// trend, the detrended series averaged by phase is the season, and the season
+// is then centred on zero so that it carries no level. For an EVEN period the
+// average is taken over period+1 points with half weight at each end, because
+// a window of 24 hourly points has no centre and a plain average of it would
+// be assigned half an hour off; for an odd period it is the plain average of
+// period points. The two implementations agree to 2e-13 on the interior of
+// series of magnitude 300 — a few ulps of float64, the only disagreement left
+// being the order the additions happen in — checked against statsmodels 0.15.0
+// over six series by benchmarks/verify_classical.py.
+//
+// It is O(n) — a running window sum, then one pass to average by phase — where
+// Decompose solves two least-squares systems: n=4,000 at period 24 takes
+// 0.0408 ms against Decompose's 1.70 ms for the same arguments, and 0.161 ms
+// for seasonal_decompose. It is the fast path when the period is already known.
+//
+// What it does NOT do, and what Decompose is for:
+//   - No period detection. The period you pass is the period used; a wrong one
+//     is fitted without complaint. Period answers "does this repeat, and how
+//     often?", and Decompose runs it for you.
+//   - No trend breaks. The returned Changepoints is always nil. A level shift
+//     is smeared across one window of the moving average rather than reported.
+//   - No forecast. The result carries no trend model, so Forecast returns nil:
+//     a moving average says nothing about the point after the last one.
+//   - No outlier filtering. The average IS the estimate here, so a spike lands
+//     in the trend for the period around it and in the season for its phase.
+//     Decompose scores on a Hampel-cleaned copy; this does not, because the
+//     classical decomposition is defined without it and filtering would make
+//     the result disagree with every other implementation of it.
+//
+// # The ends
+//
+// A centred average of period points is undefined for the first and last
+// period/2 points, because there is no window to average: that is a property
+// of the method, not of this implementation. statsmodels returns NaN there.
+// This returns the nearest defined average instead — the leading period/2
+// points all hold the first real average, the trailing period/2 all hold the
+// last — because a NaN in a component poisons the sum, the plot and the
+// variance a caller computes from it, while a held value is a stated
+// approximation.
+//
+// Two consequences, both deliberate. The season is averaged over the interior
+// ONLY, so those held points do not pull it towards the series' own curvature,
+// which is what keeps the figures identical to statsmodels. And the residual
+// is x − trend − season at every index, so the three components add up to the
+// series everywhere including the ends: the held trend's error lands in the
+// residual, visible, rather than being hidden in a smoothed trend. Those first
+// and last period/2 residuals are therefore not comparable with the interior
+// ones — they carry up to half a period of trend curvature. Treat the interior
+// [period/2, len(x)−period/2) as the decomposition and the ends as padding.
+//
+// NaN values are forward-filled and leading NaNs take the first real value, as
+// everywhere else in this package. A period below 2 is an error, and so is a
+// series shorter than two full cycles (ErrTooShort): with less than that, some
+// phase of the season has no point at all to average.
+func Classical(x []float64, period int) (*Decomposition, error) {
+	if period < 2 {
+		return nil, errors.New("season: period must be at least 2")
+	}
+	if len(x) < 2*period {
+		return nil, ErrTooShort
+	}
+	if allNaN(x) {
+		return nil, errors.New("season: series has no values")
+	}
+	y := fill(x)
+	n := len(y)
+	// h is both the half-width of the window and the number of undefined
+	// points at each end: period/2 for an even period, (period−1)/2 for an
+	// odd one, which integer division gives for both.
+	h := period / 2
+	even := period%2 == 0
+
+	trend := make([]float64, n)
+	// The window for index t is the period points y[t−h : t−h+period], plus
+	// the extra half-weighted point y[t+h] when the period is even. Carrying
+	// its sum forward costs two operations per point instead of period, which
+	// is the whole reason this is O(n).
+	//
+	// Recomputed from scratch every period points, which costs one more
+	// addition per point amortised. A sum carried the length of the series
+	// keeps the rounding error of every addition it ever made, and that error
+	// grows with n while the window's own magnitude does not: on a long series
+	// of large values the drift would eventually show up in the trend, and it
+	// would show up as a slow wander that looks like signal.
+	w := 0.0
+	for _, v := range y[:period] {
+		w += v
+	}
+	for t := h; t <= n-1-h; t++ {
+		s := t - h
+		if s > 0 {
+			if s%period == 0 {
+				w = 0
+				for _, v := range y[s : s+period] {
+					w += v
+				}
+			} else {
+				w += y[s+period-1] - y[s-1]
+			}
+		}
+		v := w
+		if even {
+			// The two half-weighted ends, as a correction to the plain sum:
+			// +0.5·y[t+h] for the point the window does not reach, −0.5·y[t−h]
+			// to halve the one it does.
+			v += 0.5 * (y[t+h] - y[t-h])
+		}
+		trend[t] = v / float64(period)
+	}
+
+	// The season is the mean of the detrended series at each phase of the
+	// cycle, over the indices where the average above is defined.
+	sum := make([]float64, period)
+	cnt := make([]int, period)
+	for t := h; t <= n-1-h; t++ {
+		ph := t % period
+		sum[ph] += y[t] - trend[t]
+		cnt[ph]++
+	}
+	// No phase can be empty: the defined range is n−2h points, which is at
+	// least period long once the series covers two full cycles, and period
+	// consecutive points touch every phase exactly once.
+	mean := 0.0
+	for i := range sum {
+		sum[i] /= float64(cnt[i])
+		mean += sum[i]
+	}
+	mean /= float64(period)
+	// A season with a mean is a level in disguise. Take the mean out so that
+	// the level stays in the trend, where a caller looking for "how big is
+	// the series" will find it.
+	for i := range sum {
+		sum[i] -= mean
+	}
+
+	// The ends hold the nearest defined average. See "The ends" above.
+	for t := 0; t < h; t++ {
+		trend[t] = trend[h]
+	}
+	for t := n - h; t < n; t++ {
+		trend[t] = trend[n-1-h]
+	}
+
+	d := &Decomposition{
+		Period:   period,
+		Trend:    trend,
+		Seasonal: make([]float64, n),
+		Residual: make([]float64, n),
+		n:        n,
+	}
+	for t := range y {
+		se := sum[t%period]
+		d.Seasonal[t] = se
+		d.Residual[t] = y[t] - trend[t] - se
+	}
+	return d, nil
 }
 
 func seasonAt(f Fourier, t int) float64 { return f.At(t) }
