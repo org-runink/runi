@@ -51,4 +51,32 @@
 //
 // Everything is deterministic: same input, same output, no concurrency, no
 // randomness, no clock.
+//
+// # Measured against statsmodels
+//
+// 200 independent synthetic series, AR(1) errors, one exogenous regressor,
+// n=500, h=6, both libraries reading the same generated CSVs. The control is
+// the naive carry-forward error, which depends on the data and on neither
+// library; it came out to 3.7104740961972245 on both sides, to every digit,
+// which is how the two are known to have been fitted to identical numbers.
+//
+//	                              arimax    SARIMAX
+//	fit, n=500                   0.41 ms   15.06 ms    37x faster
+//	fit, n=2,000                 1.77 ms   51.13 ms    29x faster
+//	fit, n=10,000                7.92 ms   260.3 ms    33x faster
+//	start-up before first fit        0 ms     705 ms
+//	95% interval coverage          94.5%      94.5%    identical
+//	forecast RMSE, h=6           1.31694    1.31601    within 0.07%
+//	AR phi bias / RMSE   -0.00419/0.05084  -0.00407/0.05062
+//	beta bias / RMSE     -0.00293/0.06662  +0.00229/0.03361
+//
+// Read the last row before the speed rows: statsmodels recovers the exogenous
+// coefficient about twice as precisely, which is the price of CSS against exact
+// maximum likelihood through a Kalman filter. If the coefficient is the finding,
+// use statsmodels. If the forecast is, the two agree to 0.07% in six-step RMSE
+// and both deliver 94.5% empirical coverage against a nominal 95%.
+//
+// Measured on an ASUS Ascent GX10, 20 cores, aarch64, Go 1.27.2, statsmodels
+// 0.15.0 on Python 3.12.3. See benchmarks/README.md in the repository for the
+// method and the raw results.
 package arimax
