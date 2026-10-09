@@ -167,10 +167,19 @@ func DecodeOne(text string, v any) error {
 	if trimmed := strings.TrimSpace(text); trimmed != "" && decodeOne(trimmed, v, false) == nil {
 		return nil
 	}
+	// Counting is done against a scratch value of the destination's type, not
+	// against the destination itself. Decoding into v to find out whether a
+	// candidate fits leaves the last one that fitted sitting in v, so a caller
+	// that got ErrAmbiguous and did not zero its variable would read a value
+	// this function explicitly refused to choose — the one failure mode
+	// DecodeOne exists to prevent, reintroduced by the check for it.
+	dst := reflect.ValueOf(v).Elem()
+	scratch := reflect.New(dst.Type()).Interface()
+
 	var matches []string
 	for _, c := range vals {
 		for _, cand := range unwrap(c.JSON) {
-			if decodeOne(cand, v, false) == nil {
+			if decodeOne(cand, scratch, false) == nil {
 				matches = append(matches, cand)
 				break
 			}
