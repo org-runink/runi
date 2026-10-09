@@ -88,7 +88,47 @@ func Mean(x []float64) float64 {
 		}
 		sum = t
 	}
-	return (sum + c) / float64(len(x))
+	out := (sum + c) / float64(len(x))
+	if !math.IsInf(out, 0) && !math.IsNaN(out) {
+		return out
+	}
+	// The accumulator overflowed on values whose mean is perfectly
+	// representable. Compensation cannot help here -- no single float64 can
+	// hold the sum -- so fall back to averaging a scaled copy. The check above
+	// costs one comparison and the extra pass is only ever paid by data that
+	// has already overflowed.
+	return meanScaled(x, out)
+}
+
+// meanScaled averages x after dividing through by the largest magnitude in it,
+// so the running sum cannot overflow. fast is what the single-accumulator pass
+// produced; it is returned unchanged when x holds a NaN or an infinity, since
+// those make the mean genuinely undefined rather than merely unrepresentable.
+func meanScaled(x []float64, fast float64) float64 {
+	var scale float64
+	for _, v := range x {
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return fast
+		}
+		if a := math.Abs(v); a > scale {
+			scale = a
+		}
+	}
+	if scale == 0 {
+		return fast
+	}
+	var sum, c float64
+	for _, v := range x {
+		v /= scale
+		t := sum + v
+		if math.Abs(sum) >= math.Abs(v) {
+			c += (sum - t) + v
+		} else {
+			c += (v - t) + sum
+		}
+		sum = t
+	}
+	return (sum + c) / float64(len(x)) * scale
 }
 
 // Variance is the SAMPLE variance, dividing by n-1. Use [PopVariance] when the

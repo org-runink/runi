@@ -61,6 +61,7 @@ func Scan(text string) (vals []Value, truncated bool) {
 	var stack []byte // the open brackets, outermost first
 	start := -1
 	inString, escaped := false, false
+	looseQuotes := 0 // quotes seen in the prose AROUND the values
 
 	for i := 0; i < len(text); i++ {
 		c := text[i]
@@ -77,8 +78,20 @@ func Scan(text string) (vals []Value, truncated bool) {
 		}
 		switch c {
 		case '"':
-			// A string outside any bracket is not a candidate: Decode tries the
-			// whole text for that. Inside one it is just content.
+			if len(stack) == 0 {
+				// A quote in the prose around a value is not the start of a
+				// JSON string and must not be entered as one. Treating it as
+				// one lets a single stray quote -- an explanation that opens a
+				// quotation and never closes it -- swallow the value that
+				// follows, so Scan reports one candidate where there were two
+				// and DecodeOne hands back an answer instead of refusing an
+				// ambiguous reply. Count the quote instead; the parity is used
+				// below, and only to report truncation.
+				looseQuotes++
+				continue
+			}
+			// Inside a value a quote opens a real JSON string, where a bracket
+			// is content rather than structure.
 			inString = true
 		case '{', '[':
 			if len(stack) == 0 {
@@ -111,8 +124,12 @@ func Scan(text string) (vals []Value, truncated bool) {
 		}
 	}
 	// Anything still open at the end was never closed. Its contents are NOT
-	// emitted: see the note above on why that matters.
-	if len(stack) > 0 || inString {
+	// emitted: see the note above on why that matters. An odd number of prose
+	// quotes says the text stops inside a quotation, which is the same
+	// evidence of a cut-off reply even when every value in it closed; escapes
+	// are not honoured out here, because prose is not JSON and the parity only
+	// ever makes the caller more careful.
+	if len(stack) > 0 || looseQuotes%2 == 1 {
 		truncated = true
 	}
 	return vals, truncated
@@ -245,7 +262,14 @@ func decodeOne(s string, v any, strict bool) error {
 	if err := dec.Decode(&raw); err != nil {
 		return err
 	}
-	if dec.More() {
+	// json.Decoder.More reports whether another element follows INSIDE the
+	// array or object being parsed, so at the top level it answers false for a
+	// leading ']' or '}'. Using it as a trailing-data guard therefore accepts
+	// `{"a":1}}` and `{"a":1}] [{"b":2}]` as a single value, which is how a
+	// reply holding two answers reaches a caller that asked DecodeOne to
+	// refuse exactly that. Measure against the input instead: everything after
+	// the value must be blank.
+	if rest := strings.TrimSpace(s[dec.InputOffset():]); rest != "" {
 		return errors.New("salvage: trailing data")
 	}
 	// Decode into a fresh value and assign only on success, so a candidate that
