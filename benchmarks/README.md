@@ -22,28 +22,58 @@ portable part, and even those will move with your data.
 
 ## Where `runi` wins
 
+Medians of five runs for `runi`, three for Python, each itself a median over
+repetitions.
+
 | Operation | `runi` | Python | Faster by |
 |---|---|---|---|
-| ARIMAX fit, n=500 | **0.41 ms** | 15.18 ms — statsmodels | **37×** |
-| ARIMAX fit, n=2,000 | **1.56 ms** | 51.48 ms — statsmodels | **33×** |
-| ARIMAX fit, n=10,000 | **7.41 ms** | 257.13 ms — statsmodels | **35×** |
-| OLS trend + t-test, n=100,000 | **0.15 ms** | 8.98 ms — `scipy.stats.linregress` | **58×** |
-| Avro OCF write, 20,000 rows | **1.61 ms** | 15.04 ms — fastavro | **9.4×** |
-| BM25 query ×200, 5,000 docs | **84.9 ms** | 737.5 ms — rank-bm25 | **8.7×** |
-| Pearson correlation, n=200,000 | **0.68 ms** | 3.00 ms — `scipy.stats.pearsonr` | **4.4×** |
-| Avro OCF read, 20,000 rows | **14.5 ms** | 17.4 ms — fastavro | **1.2×** |
+| ARIMAX fit, n=500 | **0.41 ms** | 15.06 ms — statsmodels | **37×** |
+| ARIMAX fit, n=2,000 | **1.77 ms** | 51.13 ms — statsmodels | **29×** |
+| ARIMAX fit, n=10,000 | **7.92 ms** | 260.3 ms — statsmodels | **33×** |
+| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33×** |
+| Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — fastavro | **8.9×** |
+| BM25 query ×200, 5,000 docs | **79.0 ms** | 648.5 ms — rank-bm25 | **8.2×** |
+| Pearson correlation, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8×** |
+| Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6×** |
+| Spearman correlation, n=200,000 | **17.9 ms** | 34.0 ms — scipy | **1.9×** |
+| BM25 index build, 5,000 docs | **65.4 ms** | 91.2 ms — rank-bm25 | **1.4×** |
+| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — fastavro | **1.1×** |
+
+Spearman and the BM25 index were both losses when this page was first written —
+243.9 ms and 177.9 ms. `ranks` sorted through `sort.SliceStable`, paying for
+reflection-based swaps, an interface call per comparison and stability it did not
+need, since tied ranks are averaged; it now sorts by radix on the float's bit
+pattern. The index hashed every token twice and allocated a map per document;
+terms are now interned once into flat postings. Neither was a property of the
+language, which is why they are no longer in the table below.
 
 ## Where `runi` loses
 
 | Operation | `runi` | Python | Slower by | Why |
 |---|---|---|---|---|
-| Seasonal decomposition, n=4,000 | 1.69 ms | **0.18 ms** — statsmodels | **9.4×** | `seasonal_decompose` is a moving average in C loops. `season.Decompose` fits a Fourier series by least squares, which costs more and gives you something a moving average cannot: a model that extrapolates. |
-| Spearman correlation, n=200,000 | 243.9 ms | **33.1 ms** — scipy | **7.4×** | scipy ranks with an optimised C argsort. Ours is a plain sort. This is a real gap and the fix is ours to make, not a property of the language. |
-| BM25 index build, 5,000 docs | 177.9 ms | **85.6 ms** — rank-bm25 | **2.1×** | We build more per document so queries are cheaper. Index once and query many times and we are ahead overall; index repeatedly and query rarely and we are not. |
+| Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — statsmodels | **9.5×** | `seasonal_decompose` is a centred moving average in C loops. Given the same period and with the break search off, `season.Decompose` fits a straight line and a Fourier series by least squares, which costs more and gives something a moving average cannot: a model that extrapolates. |
 
-`season.Decompose` with changepoint detection left on is 28.0 ms, because
-finding structural breaks is most of the work. The 1.69 ms above is
-decomposition only, which is the operation statsmodels performs.
+**This comparison is deliberately narrowed to make it fair.** Our default
+`Decompose` also runs a BIC-priced search for trend breaks, which
+`seasonal_decompose` does not do at all, so comparing the defaults measured a
+larger job and billed the difference to us as a loss on this one. The benchmark
+passes `MaxChangepoints: -1` for the row above and reports the rest separately:
+
+| `season.Decompose`, n=4,000 | |
+|---|---|
+| Period given, no break search — *what statsmodels does* | **1.74 ms** |
+| …plus the BIC changepoint search (our default) | 18.5 ms |
+| …plus detecting the period instead of being told it | 55.4 ms |
+| `season.Period` detection on its own | 4.32 ms |
+
+The honest summary: statsmodels is faster at the decomposition. `season` is for
+the case where you do not already know the period or where the trend broke.
+
+**On the absolutes.** The sub-millisecond rows move by up to ±40% between runs
+on this host — `trend` was seen between 0.154 and 0.273 ms, `Pearson` between
+0.75 and 1.09 ms — so treat the ratios as the result and the absolutes as
+context. Allocation counts, file sizes and every accuracy figure below are
+deterministic and repeat exactly.
 
 ## Accuracy, which matters more than speed
 
@@ -74,17 +104,18 @@ The same Pearson correlation over 200,000 rows:
 
 | | Time |
 |---|---|
-| `runi/stats` | **0.68 ms** |
-| scipy | 3.00 ms |
-| SparkML `Correlation.corr`, warm session | 470 ms |
-| SparkML, counting session start and import | 3.42 s |
-| SparkML, counting the DataFrame build as well | 10.6 s |
+| `runi/stats` | **1.06 ms** |
+| `scipy.stats.pearsonr` | 2.99 ms |
+| SparkML `Correlation.corr`, warm session | 408.7 ms |
+| SparkML, counting session start and import | 3.18 s |
+| SparkML, counting the DataFrame build as well | 10.2 s |
 
-**692× on compute alone**, and the gap widens to roughly 5,000× once the
-session start a caller actually pays for is included. Spark earns that overhead
-back when the data does not fit on one machine. At 200,000 rows it does not,
-and the engine spends 7.2 seconds building a DataFrame for a calculation that
-takes well under a millisecond.
+**387× on compute alone**, and roughly 3,000× once the session start a caller
+actually pays for is included. Spark earns that overhead back when the data does
+not fit on one machine. At 200,000 rows it does, and the engine spent 7.0
+seconds building a DataFrame for a calculation that takes about a millisecond.
+These are a single run: session start-up is not something repetition measures
+more precisely.
 
 That is the case for a Go library next to a warehouse: the SDK call, the
 notebook cell and the service handler all pay cluster latency for small work.
@@ -102,5 +133,8 @@ python benchmarks/baselines.py      # rank-bm25, scipy, statsmodels, fastavro
 python benchmarks/spark_bench.py    # SparkML, needs a JVM
 ```
 
-Results land in `benchmarks/results_*.json`, which is what the tables are built
-from.
+Results land in `benchmarks/results_*.json`. Those files hold **one** run.
+The tables above are medians across five runs for `runi` and three for Python,
+because a single run of the sub-millisecond rows lands anywhere in a ±40%
+spread; the committed JSON is there so the shape of the output is inspectable,
+not so a reader can match it digit for digit against a median.
