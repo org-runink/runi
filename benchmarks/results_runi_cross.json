@@ -1,0 +1,20 @@
+{
+  "arch": "arm64",
+  "avro_bytes": 740202,
+  "avro_read_s": 0.01447224,
+  "avro_rows": 20000,
+  "avro_write_s": 0.001606557,
+  "bm25_docs": 5000,
+  "bm25_index_s": 0.177891121,
+  "bm25_queries": 200,
+  "bm25_query_s": 0.084915442,
+  "go": "go1.27.2",
+  "library": "runi",
+  "pearson_n": 200000,
+  "pearson_s": 0.000678661,
+  "season_decompose_s": 0.020225629,
+  "season_n": 4000,
+  "spearman_s": 0.243907184,
+  "trend_n": 100000,
+  "trend_s": 0.000154209
+}
