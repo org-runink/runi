@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Eleven small Go packages, zero dependencies, every claim measured.</em>
+  Twelve small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
+  <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -52,6 +52,7 @@ go get github.com/org-runink/runi
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
+| [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -567,6 +568,48 @@ storage stay yours.
 
 ---
 
+## `runi/toon` — the table format models write
+
+TOON writes a list of uniform objects as the field names **once** and then a
+row each, instead of repeating every key on every record. For the shape a model
+actually returns — twenty findings that all have the same four fields — that is
+most of the tokens.
+
+```go
+text, err := toon.Encode(report)        // to send
+err = toon.Decode(reply, &findings)     // to read back
+err = toon.Strict(reply, &findings)     // and to insist the counts match
+```
+
+```
+findings[2]{id,severity,file}:
+  1,high,cmd/server/main.go
+  2,low,internal/cache.go
+```
+
+`Decode` is deliberately forgiving, because the input is a model's output: it
+strips a ``` fence, ignores blank lines, and **takes the values over the
+declared count**, since a model that miscounts its own list has still told you
+the list. `Strict` is the one that refuses a count mismatch, and that is the
+difference between the two — reach for `Strict` when the decoded value drives a
+decision rather than being shown to someone.
+
+Three asymmetries are documented rather than hidden, because each one is a test
+in the package:
+
+- a **top-level list** gains the key `items`, since a TOON document is a mapping
+  and a bare list has no key to hang on;
+- an **empty object** as a field's value is written `key:` and reads back as
+  null, because the parser cannot tell that from a line a model left blank, and
+  guessing "empty object" would make it stricter on exactly the input it exists
+  to be lenient about;
+- `Parse` keeps an integer as an `int64` and so is exact; `Decode` into `any`
+  goes through `encoding/json`, which rounds past 2⁵³. Decode into a typed
+  destination, or use `Parse`.
+
+
+---
+
 ## Benchmarks
 
 ### Against the Python packages people reach for first
@@ -869,7 +912,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the twelve packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
