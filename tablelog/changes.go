@@ -70,6 +70,11 @@ func (s *Snapshot) ChangesSince(ctx context.Context, prefix string, after int64)
 		if out[i].Ord != out[j].Ord {
 			return out[i].Ord < out[j].Ord
 		}
+		// Not reachable today, and kept anyway so the comparator is total:
+		// Ord is the row's position within its commit, so two changes at the
+		// same version always have different Ords. A sort whose comparator is
+		// only a partial order is unstable in a way that shows up as changes
+		// arriving in a different order on different runs.
 		return out[i].Key < out[j].Key
 	})
 	return out, nil

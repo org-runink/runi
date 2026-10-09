@@ -35,6 +35,12 @@ func (t *Table) Compact(ctx context.Context) (CompactResult, error) {
 	var lastErr error
 	for plan := 0; plan < t.cfg.maxAttempts; plan++ {
 		if plan > 0 {
+			// Exercised by TestCompactStopsIfCancelledWhileWaitingToReplan,
+			// which skips when the compaction wins its race before the
+			// cancellation lands. Covering this deterministically would need a
+			// test whose result depends on scheduling, and a test that passes
+			// or skips depending on how busy the machine is teaches people to
+			// re-run it rather than read it.
 			if err := t.backoff(ctx, plan); err != nil {
 				return CompactResult{}, err
 			}
