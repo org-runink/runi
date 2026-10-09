@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Three small Go packages, zero dependencies, every claim measured.</em>
+  Eleven small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -26,7 +26,7 @@
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
   <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
-  <img src="https://img.shields.io/badge/coverage-92.2%25-brightgreen" alt="coverage">
+  <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
 

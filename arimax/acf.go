@@ -48,7 +48,13 @@ func PACF(y []float64, maxLag int) []float64 {
 	if len(r) == 0 {
 		return nil
 	}
-	return levinson(r, maxLag)
+	// ACF clamps maxLag to the lags the series can actually supply, so the
+	// sequence it returns may be shorter than the caller asked for. The
+	// recursion must be run over what came back, not over what was requested:
+	// passing the original maxLag on indexes past the end of r, and PACF
+	// panicked for every caller who asked for more lags than the series has
+	// points -- which is the ordinary way to ask for "as many as there are".
+	return levinson(r, len(r)-1)
 }
 
 // levinson runs the Durbin–Levinson recursion over an autocorrelation sequence.
