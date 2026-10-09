@@ -51,7 +51,7 @@ go get github.com/org-runink/runi
 |---|---|---|
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, and test whether a relationship is real | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | **100%** |
-| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart | **100%** |
+| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart — fitted, or by moving average | **100%** |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | **100%** |
@@ -348,7 +348,17 @@ p := season.Period(y, 0)               // 7 for weekly, 0 for "no season"
 breaks := season.Changepoints(y, 3)    // indices where the trend changed
 d, _ := season.Decompose(y, season.Options{})
 next := d.Forecast(14)                 // trend continued + season
+
+c, _ := season.Classical(y, 7)         // the moving-average split, period known
 ```
+
+**There are two decompositions, and the cheap one is usually the answer.**
+`Classical` is the textbook centred moving average — the operation
+`statsmodels.seasonal_decompose` performs, in one O(n) pass, 3.9× faster than
+it and agreeing with it to 2e-13. It detects no period, finds no breaks and
+makes no forecast; it is the function for "I know this is hourly data, split
+it". `Decompose` is the fitted version, and it is what answers the two
+questions above at the same time.
 
 **It says "no season" when there is none.** Scanning dozens of lags for a peak
 finds one in pure noise unless the bar is raised for the number of lags tried.
@@ -369,10 +379,22 @@ holidays, several seasonalities and a Bayesian treatment of changepoints. If you
 want Prophet, use Prophet. This is the classical additive decomposition
 underneath, with no dependencies.
 
+**The ends are stated, not smoothed over.** A centred average of `period`
+points does not exist for the first and last `period/2` points — there is no
+window. statsmodels returns NaN there; `Classical` holds the nearest real
+average instead, averages the season over the interior only so those held
+points cannot pull it, and puts the difference in the residual, so
+`trend + season + residual` still adds up to the series *at every index,
+including the ends*. A NaN in a component poisons the plot, the sum and the
+variance a caller takes from it; a held value with the error left visible does
+not.
+
 What it does not do: **one** seasonality only (the strongest wins); the trend is
 straight lines between breaks, fitted independently, so a forecast extends the
-last line; no prediction intervals. Short series are refused rather than
-guessed at: `Period` needs 8 points and two full cycles, `Decompose` needs 4.
+last line; no prediction intervals; `Classical` neither detects a period nor
+forecasts nor filters outliers, by design. Short series are refused rather than
+guessed at: `Period` needs 8 points and two full cycles, `Decompose` needs 4,
+`Classical` needs two full cycles of the period it is handed.
 
 ## `runi/avro` — Apache Avro without the dependency tree
 
@@ -671,8 +693,7 @@ speed is irrelevant.
 
 **And you should not use it when:** you need the regression coefficient itself
 rather than a forecast — statsmodels recovers β twice as precisely, and that is
-in the table below; you already know your seasonal period and want the
-classical decomposition — statsmodels is 9.5× faster at it; your data does not
+in the table below; your data does not
 fit on one machine — that is what Spark is for; or you want an ecosystem, a
 notebook and a plotting library, which this will never have.
 
@@ -704,41 +725,64 @@ the whole reason the tables quote medians.
 | OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33× faster** |
 | Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — `fastavro` | **8.9× faster** |
 | BM25, 200 queries over 5,000 docs | **79.0 ms** | 648.5 ms — `rank_bm25` | **8.2× faster** |
+<<<<<<< HEAD
 | Avro OCF read, 20,000 rows | **4.53 ms** | 18.2 ms — `fastavro` | **4.0× faster** |
+=======
+| Seasonal decomposition, n=4,000 | **0.0408 ms** | 0.161 ms — `statsmodels` `seasonal_decompose` | **3.9× faster** |
+>>>>>>> origin/perf/season-classical
 | Pearson, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8× faster** |
 | Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6× faster** |
 | Spearman, n=200,000 | **17.9 ms** | 34.0 ms — `scipy.stats.spearmanr` | **1.9× faster** |
 | Index 5,000 docs | **65.4 ms** | 91.2 ms — `rank_bm25` | **1.4× faster** |
+<<<<<<< HEAD
 | Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — `statsmodels` | **9.5× slower** |
+=======
+| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — `fastavro` | **1.1× faster** |
+| …the same split by least squares instead, n=4,000 | 1.70 ms | **0.161 ms** — `statsmodels` | **10.6× slower** |
+>>>>>>> origin/perf/season-classical
 
 The Avro file is also 740,202 bytes against fastavro's 741,181 — the same data,
 0.13% smaller, each readable by the other.
 
 **On the absolutes:** the sub-millisecond rows move by up to ±40% between runs
 on this host, so the ratios are the claim and the absolutes are context. `trend`
-was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms.
+was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms,
+and `season.Classical` — at 41 microseconds the smallest figure in the table —
+between 0.025 and 0.089 ms over fourteen runs, which is why the claim is the
+3.9× and not the 0.0408.
 Figures that *are* deterministic — allocation counts, file sizes, and every
 accuracy number below — are stated as facts.
 
-**The seasonal row is the one honest loss, and making it a fair fight took
-work.** `statsmodels.seasonal_decompose` is told the period and computes a
-centred moving average. Our default `Decompose` is told the period and *also*
-runs a BIC-priced search for trend breaks, which `seasonal_decompose` does not
-do at all — so comparing the two measured a larger job and reported the
-difference as our loss. The benchmark now disables the break search for the
-comparison, which is like for like, and reports the extra work separately:
+**The two seasonal rows are the same question asked twice, and getting them
+honest took three goes.** `statsmodels.seasonal_decompose` is told the period
+and computes a centred moving average. The first version of this table compared
+it against our default `Decompose`, which *also* runs a BIC-priced search for
+trend breaks — a larger job, reported as our loss. Turning the break search off
+made the timing fair but not the method: `Decompose` still fitted a line and a
+Fourier series by least squares, which is a different estimator with a
+different answer, and it lost by 9.5×. `season.Classical` is now the
+moving-average method itself, and it wins by 3.9× while agreeing with
+statsmodels to **2e-13** on a series of magnitude 300 — a few ulps of float64,
+verified over six series by
+[`benchmarks/verify_classical.py`](benchmarks/verify_classical.py). Same
+method, same numbers, one pass over the series.
 
-| `season.Decompose`, n=4,000 | |
+The least-squares route stays in the table as a loss, because it is one, and
+the extra work is priced separately rather than folded in:
+
+| `season`, n=4,000, period given | |
 |---|---:|
-| Period given, no break search — *the operation statsmodels performs* | **1.74 ms** |
-| …plus the BIC changepoint search (the default) | 18.5 ms |
-| …plus detecting the period instead of being told it | 55.4 ms |
-| `season.Period` detection on its own | 4.32 ms |
+| `Classical` — *the operation statsmodels performs, by its method* | **0.0408 ms** |
+| `Decompose`, no break search — least-squares trend + Fourier season | 1.70 ms |
+| …plus the BIC changepoint search (the default) | 18.4 ms |
+| …plus detecting the period instead of being told it | 56.0 ms |
+| `season.Period` detection on its own | 4.38 ms |
 
-So: if you know your period and want the classical decomposition, statsmodels
-is 9.5× faster and the right tool. What `season` offers is the three things the
-moving average cannot — it finds the period, it finds where the trend broke, and
-it extrapolates — and those cost what they cost.
+So: if you know your period and want the classical decomposition, use
+`Classical`, which is faster than statsmodels at it. What the least-squares
+route buys is the three things a moving average cannot do — it finds the
+period, it finds where the trend broke, and it extrapolates — and those cost
+what they cost.
 
 Two other rows used to go the wrong way, and fixing them is why they no longer
 do. `Spearman` was 243.9 ms because `ranks` sorted through `sort.SliceStable` —
@@ -1023,7 +1067,7 @@ These hold for every generated input, not for the handful a table lists:
 | `chain` | **Every** single-bit flip, deletion and swap is caught and correctly blamed — not the five an example test lists; every prefix of a chain still verifies, so a reader racing an appender is not a false alarm |
 | `bm25` | Every score equals the per-term breakdown printed beside it; every hit shares a term with the query; padding a document can never raise its score; identical documents score identically |
 | `salvage` | Every truncation of a wrapped reply **fails closed**; `Scan`'s offsets always re-slice to the JSON it reported; its values never overlap; `DecodeOne` never partially fills a destination before refusing |
-| `season` | `trend + season + residual` **adds up** to the series it split, to the last bit; no component or forecast is ever NaN; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
+| `season` | `trend + season + residual` **adds up** to the series it split, to the last bit — for `Classical` including the two ends where the moving average does not exist; no component or forecast is ever NaN; a planted sine comes back with its amplitude at every period, which is what pins the even-period window's half weights; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
 | `stats` | Pearson stays in [−1, 1] and is symmetric; it is invariant under rescaling either input; Spearman depends only on order, which is what pins the radix ranking; ranks always sum to n(n+1)/2 |
 | `avro` | Every field type round-trips; `Long` at **all 64 varint boundaries**; doubles and floats **bit for bit**, including NaN and −0; a present empty string stays present; a truncated stream always errors |
 | `tablelog` | The table matches an independent model of its commits; a snapshot taken at an old version **never changes**; compaction preserves every visible row; prefix scans are exact; versions advance one commit at a time |

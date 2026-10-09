@@ -355,3 +355,112 @@ func TestPeriodFalseSeasonRateUnderOnePercent(t *testing.T) {
 	}
 	t.Logf("false seasons: %d of %d", found, runs)
 }
+
+// --- Classical ---
+
+// The refusals, each of which is a question the method cannot answer rather
+// than a number it could have guessed.
+func TestClassicalRefusals(t *testing.T) {
+	y := series(200, 100, 0.05, 10, 24, 1, 5)
+	for _, p := range []int{-7, 0, 1} {
+		if _, err := Classical(y, p); err == nil {
+			t.Errorf("Classical(period=%d) returned a decomposition", p)
+		}
+	}
+	// Two full cycles is the floor: below it some phase of the season has no
+	// point at all to average.
+	if _, err := Classical(y[:47], 24); !errors.Is(err, ErrTooShort) {
+		t.Errorf("47 points at period 24: err = %v, want ErrTooShort", err)
+	}
+	if _, err := Classical(y[:48], 24); err != nil {
+		t.Errorf("48 points at period 24 is exactly two cycles: %v", err)
+	}
+	nan := make([]float64, 100)
+	for i := range nan {
+		nan[i] = math.NaN()
+	}
+	if _, err := Classical(nan, 12); err == nil {
+		t.Error("a series of NaN returned a decomposition")
+	}
+}
+
+// An odd period takes a plain average of period points; an even one takes
+// period+1 with half weight at each end. Both are checked against the
+// definition computed the slow, obvious way, which is what the running window
+// sum in Classical is an optimisation of.
+func TestClassicalMatchesTheDefinition(t *testing.T) {
+	for _, p := range []int{2, 3, 4, 7, 12, 24, 25} {
+		y := series(10*p+5, 50, 0.3, 8, p, 0.7, uint64(p))
+		d, err := Classical(y, p)
+		if err != nil {
+			t.Fatalf("p=%d: %v", p, err)
+		}
+		h := p / 2
+		for t0 := h; t0 < len(y)-h; t0++ {
+			want := 0.0
+			if p%2 == 0 {
+				want += 0.5 * (y[t0-h] + y[t0+h])
+				for j := t0 - h + 1; j < t0+h; j++ {
+					want += y[j]
+				}
+			} else {
+				for j := t0 - h; j <= t0+h; j++ {
+					want += y[j]
+				}
+			}
+			want /= float64(p)
+			if got := d.Trend[t0]; math.Abs(got-want) > 1e-9 {
+				t.Fatalf("p=%d: trend[%d] = %v, the centred average is %v", p, t0, got, want)
+			}
+		}
+		// The ends hold the nearest defined average, and nothing else.
+		for t0 := 0; t0 < h; t0++ {
+			if d.Trend[t0] != d.Trend[h] {
+				t.Fatalf("p=%d: trend[%d] = %v, want the held %v", p, t0, d.Trend[t0], d.Trend[h])
+			}
+		}
+		last := len(y) - 1 - h
+		for t0 := last + 1; t0 < len(y); t0++ {
+			if d.Trend[t0] != d.Trend[last] {
+				t.Fatalf("p=%d: trend[%d] = %v, want the held %v", p, t0, d.Trend[t0], d.Trend[last])
+			}
+		}
+	}
+}
+
+// The season repeats, exactly, because it is one value per phase and nothing
+// else. A caller indexing it a cycle apart must get the same number.
+func TestClassicalSeasonIsOnePatternRepeated(t *testing.T) {
+	const p = 18
+	y := series(13*p, 10, -0.2, 4, p, 0.5, 11)
+	d, err := Classical(y, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range y {
+		if j := i + p; j < len(y) && d.Seasonal[i] != d.Seasonal[j] {
+			t.Fatalf("season[%d] = %v but season[%d] = %v", i, d.Seasonal[i], j, d.Seasonal[j])
+		}
+	}
+}
+
+// Holes are forward-filled, as everywhere else here, so a series with gaps
+// still decomposes and still adds up -- to the FILLED series, which is what
+// the components describe.
+func TestClassicalFillsHoles(t *testing.T) {
+	const p = 12
+	y := series(8*p, 30, 0.1, 5, p, 0.4, 13)
+	holed := append([]float64(nil), y...)
+	holed[0], holed[1], holed[40], holed[len(holed)-1] = math.NaN(), math.NaN(), math.NaN(), math.NaN()
+	d, err := Classical(holed, p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	filled := fill(holed)
+	for i := range filled {
+		sum := d.Trend[i] + d.Seasonal[i] + d.Residual[i]
+		if math.Abs(sum-filled[i]) > 1e-9 {
+			t.Fatalf("point %d: components sum to %v, filled series is %v", i, sum, filled[i])
+		}
+	}
+}
