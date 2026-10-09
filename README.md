@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Eleven small Go packages, zero dependencies, every claim measured.</em>
+  Twelve small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
+  <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -52,6 +52,7 @@ go get github.com/org-runink/runi
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
+| [`runi/certissue`](#runicertissue--short-lived-certificates-the-ca-key-out-of-reach) | Sign short-lived certificates from requests; nothing that asks can reach the CA key | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -87,6 +88,7 @@ you are still the one doing the work.
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
+| 🔐 **the collar** | [`certissue`](#runicertissue--short-lived-certificates-the-ca-key-out-of-reach) | Papers that say who he is at every gate, and expire before anyone else can use them |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -567,6 +569,48 @@ storage stay yours.
 
 ---
 
+## `runi/certissue` — short-lived certificates, the CA key out of reach
+
+A service that hands out certificates should be the only thing that can sign
+them. `certissue` signs leaf certificates from PKCS#10 requests: each requester
+makes its own key and sends a request, and the CA's `crypto.Signer` never leaves
+the `Issuer`.
+
+```go
+iss, _ := certissue.NewIssuer(caSigner, caCert, policy, certissue.Options{MaxTTL: 24 * time.Hour})
+leaf, chain, err := iss.Issue(ctx, certissue.Request{CSR: csr, Identity: who, TTL: time.Hour})
+
+cl := certissue.NewClient(certissue.Config{Names: names, TTL: time.Hour, Issue: callYourIssuer})
+err = cl.Start(ctx)                                  // renews at 2/3 of the lifetime, jittered
+cfg := &tls.Config{GetCertificate: cl.GetCertificate}
+```
+
+**Policy returns names, not a yes or no.** The leaf carries exactly the names
+that were both requested and allowed. Anything else in the request, its subject
+and e-mail addresses included, is dropped. The lifetime is the shortest of the
+requested TTL, the policy's and `Options.MaxTTL`, and never runs past the CA.
+The request's own signature must verify, so nobody gets a certificate for a key
+they do not hold.
+
+**No path to the key.** The signer sits in an unexported field. No method
+returns it, and the type formats as a fixed string, so a stray `%+v` in a log
+line cannot print it. **Rotation** uses a `Bundle`: trust old and new side by
+side, then retire the old CA once its last leaf has expired.
+**`VerifyPeerIdentity`** checks the name on a peer's certificate. A chain to a
+trusted CA only proves that the CA issued it, and the CA issues to everyone.
+
+Every reading of the time goes through an injectable `Clock`. The only
+goroutine is the one `Start` starts. A test parses the package's source and
+fails if either rule is broken.
+
+**What it does not do:** authenticate anyone (the host fills in `Identity` from
+its own authentication), revoke (short lifetimes are the revocation), store
+keys, keep an issuance log, or speak any protocol. If you want a complete CA
+server with storage and ACME, use one such as step-ca or Vault's PKI engine. For
+certificates a browser must trust, use ACME against a public CA.
+
+---
+
 ## Benchmarks
 
 ### Against the Python packages people reach for first
@@ -869,7 +913,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the twelve packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -879,12 +923,14 @@ continuously verified in CI, not asserted once.
 **Runtime behaviour**, since questionnaires ask: no network access, no filesystem
 access, no subprocesses, no `unsafe`, no cgo, no reflection over untrusted input.
 Deterministic — same input, same output, with the only clock read being one the
-caller injects for testing expiry.
+caller injects for testing expiry. The one exception is `certissue`, whose keys,
+serial numbers and signatures are random by design and come from `crypto/rand`.
 
 **What this is not**, stated so nobody infers it: `memo.Hash` uses SHA-256 to
 derive cache keys and is **not** a security boundary; the packages perform no
-authentication, authorisation or input validation; `memo` is in-process only,
-with no listener and nothing shared between replicas.
+authentication, and apart from `certissue` (which checks certificate requests
+and enforces the policy you give it) no authorisation or input validation;
+`memo` is in-process only, with no listener and nothing shared between replicas.
 
 ## Used by
 
