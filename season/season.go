@@ -229,18 +229,56 @@ func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
 	for i := range xtx {
 		xtx[i] = make([]float64, p)
 	}
-	row := make([]float64, p)
-	for t, y := range x {
+	// The basis depends only on t mod period, so there are at most `period`
+	// distinct rows however long the series is. Computing them once turns the
+	// two transcendental calls per column per point — 28,000 of them for a
+	// 4,000-point daily series with three harmonics — into a few dozen, and
+	// leaves the accumulation below reading from a table that stays in cache.
+	phases := period
+	if phases > len(x) {
+		phases = len(x) // t mod period == t when the series is shorter
+	}
+	table := make([][]float64, phases)
+	flat := make([]float64, phases*p)
+	for ph := range table {
+		table[ph] = flat[ph*p : (ph+1)*p : (ph+1)*p]
 		for j, c := range cols {
-			row[j] = basis(c, t)
+			table[ph][j] = basis(c, ph)
 		}
+	}
+	// The normal equations are accumulated per PHASE, not per point.
+	//
+	// Every row of the design matrix is one of `phases` distinct rows, so
+	// X'X is sum over phases of count[ph] * outer(row_ph, row_ph), and X'y is
+	// sum over phases of row_ph * (sum of y at that phase). Bucketing y by
+	// phase costs one pass over the series; the outer products then cost
+	// phases*p*p instead of n*p*p. For a 4,000-point daily series with three
+	// harmonics that is 24*49 instead of 4,000*49 — the same numbers, two
+	// orders of magnitude fewer multiplies, and no approximation anywhere.
+	counts := make([]float64, phases)
+	ysum := make([]float64, phases)
+	for t, y := range x {
+		ph := t % phases
+		counts[ph]++
+		ysum[ph] += y
+	}
+	for ph := 0; ph < phases; ph++ {
+		// Every phase is occupied: phases is min(period, len(x)), and t mod
+		// phases visits all of them for t in 0..len(x)-1. A zero-count guard
+		// here would be a branch no test could enter.
+		c, ys := counts[ph], ysum[ph]
+		row := table[ph]
 		for i := 0; i < p; i++ {
-			xty[i] += row[i] * y
+			ri := row[i]
+			xty[i] += ri * ys
+			dst := xtx[i]
+			cri := c * ri
 			for j := 0; j < p; j++ {
-				xtx[i][j] += row[i] * row[j]
+				dst[j] += cri * row[j]
 			}
 		}
 	}
+
 	beta, ok := solve(xtx, xty)
 	if !ok {
 		return Fourier{}, errors.New("season: series cannot identify this period")
@@ -707,11 +745,20 @@ func hampel(v []float64) []float64 {
 	}
 	limit := hampelMADs * sigma
 	out := make([]float64, n)
-	win := make([]float64, 0, width)
+	// A fixed array, sorted in place by insertion. medianOf would allocate a
+	// copy of the window for every point — eight thousand allocations for a
+	// 4,000-point series, since this runs twice — and at seven elements an
+	// insertion sort beats anything cleverer.
+	var win [2*hampelHalf + 1]float64
 	for i := range v {
 		lo := min(max(i-hampelHalf, 0), n-width)
-		win = append(win[:0], v[lo:lo+width]...)
-		if med := medianOf(win); math.Abs(v[i]-med) > limit {
+		copy(win[:], v[lo:lo+width])
+		for a := 1; a < width; a++ {
+			for b := a; b > 0 && win[b] < win[b-1]; b-- {
+				win[b], win[b-1] = win[b-1], win[b]
+			}
+		}
+		if med := win[width/2]; math.Abs(v[i]-med) > limit {
 			out[i] = med
 			continue
 		}

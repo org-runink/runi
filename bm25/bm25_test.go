@@ -225,7 +225,7 @@ func TestStopwordsAreRemovedFromBothSides(t *testing.T) {
 	if got := ix.Search("the", 0); got != nil {
 		t.Fatalf("a stopword query returned %v; want nothing", got)
 	}
-	if _, indexed := ix.postings["the"]; indexed {
+	if _, indexed := ix.termID["the"]; indexed {
 		t.Fatal("a stopword was indexed")
 	}
 	// Non-stopword search still works.
