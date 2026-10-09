@@ -188,8 +188,7 @@ func blockPayload(t *testing.T, ocf []byte) []byte {
 	if end, err := d.Long(); err != nil || end != 0 {
 		t.Fatalf("meta map terminator = %d, %v; want 0, nil", end, err)
 	}
-	sync := make([]byte, 16)
-	if _, err := io.ReadFull(d.r, sync); err != nil {
+	if _, err := d.raw(16); err != nil {
 		t.Fatalf("sync marker: %v", err)
 	}
 	if _, err := d.Long(); err != nil { // record count
@@ -199,11 +198,12 @@ func blockPayload(t *testing.T, ocf []byte) []byte {
 	if err != nil {
 		t.Fatalf("block size: %v", err)
 	}
-	payload := make([]byte, size)
-	if _, err := io.ReadFull(d.r, payload); err != nil {
+	payload, err := d.raw(size)
+	if err != nil {
 		t.Fatalf("block payload: %v", err)
 	}
-	return payload
+	// d.raw hands back the decoder's own window; copy it before it is reused.
+	return append([]byte(nil), payload...)
 }
 
 func TestOCFEmptyContainerIsValidAndReadsBackEmpty(t *testing.T) {
@@ -654,9 +654,9 @@ func headerSync(t *testing.T, ocf []byte) []byte {
 	if _, err := d.Long(); err != nil {
 		t.Fatal(err)
 	}
-	sync := make([]byte, 16)
-	if _, err := io.ReadFull(d.r, sync); err != nil {
+	sync, err := d.raw(16)
+	if err != nil {
 		t.Fatal(err)
 	}
-	return sync
+	return append([]byte(nil), sync...)
 }

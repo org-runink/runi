@@ -239,3 +239,54 @@ func TestWriteReadOCFBothCodecs(t *testing.T) {
 		}
 	}
 }
+
+// The decoder decodes out of a window it reuses, so every string and blob it
+// returns must be a copy. Read two records and check the first is still what
+// it was: a String that aliased the window would come back as the second
+// record's bytes, and the corruption would appear only once a file had more
+// than one record in it -- which is every real file.
+func TestDecodedStringsDoNotAliasTheWindow(t *testing.T) {
+	e := NewEncoder()
+	e.String("first-record-name")
+	e.Blob([]byte("first-record-blob"))
+	e.String("SECOND-RECORD-NAME")
+	e.Blob([]byte("SECOND-RECORD-BLOB"))
+
+	// Read it one byte at a time as well as in one go: the one-byte reader
+	// makes the window compact and refill between the two records, which is
+	// exactly the reuse that an aliased string would be destroyed by.
+	for name, r := range map[string]io.Reader{
+		"whole":    bytes.NewReader(e.Bytes()),
+		"one byte": &oneByteReader{append([]byte(nil), e.Bytes()...)},
+	} {
+		d := NewDecoder(r)
+		s1, err := d.String()
+		if err != nil {
+			t.Fatalf("%s: first string: %v", name, err)
+		}
+		b1, err := d.Blob()
+		if err != nil {
+			t.Fatalf("%s: first blob: %v", name, err)
+		}
+		s2, err := d.String()
+		if err != nil {
+			t.Fatalf("%s: second string: %v", name, err)
+		}
+		b2, err := d.Blob()
+		if err != nil {
+			t.Fatalf("%s: second blob: %v", name, err)
+		}
+		if s1 != "first-record-name" || string(b1) != "first-record-blob" {
+			t.Errorf("%s: reading the second record changed the first: %q / %q", name, s1, b1)
+		}
+		if s2 != "SECOND-RECORD-NAME" || string(b2) != "SECOND-RECORD-BLOB" {
+			t.Errorf("%s: second record = %q / %q", name, s2, b2)
+		}
+		// And a blob must not alias the window either: writing to it must not
+		// be able to change anything the decoder still holds.
+		b1[0] = 'X'
+		if s2 != "SECOND-RECORD-NAME" {
+			t.Errorf("%s: writing to a returned blob changed another value", name)
+		}
+	}
+}

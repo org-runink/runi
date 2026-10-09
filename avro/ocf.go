@@ -3,7 +3,6 @@
 package avro
 
 import (
-	"bufio"
 	"bytes"
 	"compress/flate"
 	"crypto/rand"
@@ -105,17 +104,17 @@ type OCFHeader struct {
 // files written by us or by any spec-conformant Avro writer using the same
 // schema and the null/deflate codecs.
 func ReadOCF[T any](r io.Reader, unmarshal Unmarshal[T]) (OCFHeader, []T, error) {
-	br := bufio.NewReader(r)
+	d := NewDecoder(r)
 	var hdr OCFHeader
 
-	magic := make([]byte, 4)
-	if _, err := io.ReadFull(br, magic); err != nil {
+	magic, err := d.raw(4)
+	if err != nil {
 		return hdr, nil, err
 	}
 	if !bytes.Equal(magic, ocfMagic) {
 		return hdr, nil, errors.New("avro: bad OCF magic")
 	}
-	meta, err := readMetaMap(br)
+	meta, err := readMetaMap(d)
 	if err != nil {
 		return hdr, nil, err
 	}
@@ -127,12 +126,13 @@ func ReadOCF[T any](r io.Reader, unmarshal Unmarshal[T]) (OCFHeader, []T, error)
 	if hdr.Codec != CodecNull && hdr.Codec != CodecDeflate {
 		return hdr, nil, fmt.Errorf("avro: unsupported codec %q", hdr.Codec)
 	}
-	if _, err := io.ReadFull(br, hdr.sync[:]); err != nil {
+	sync, err := d.raw(16)
+	if err != nil {
 		return hdr, nil, err
 	}
+	copy(hdr.sync[:], sync)
 
 	var out []T
-	d := NewDecoder(br)
 	for {
 		count, err := d.Long()
 		if err == io.EOF {
@@ -150,20 +150,23 @@ func ReadOCF[T any](r io.Reader, unmarshal Unmarshal[T]) (OCFHeader, []T, error)
 		// out of range); a negative count silently decoded nothing. And a huge
 		// size was allocated up front before a single byte was read, so a few
 		// bytes of corrupt header could demand gigabytes. Reject the negatives and
-		// read through a LimitReader, so memory grows only with bytes that exist.
+		// let the decoder's window grow into the block, so memory grows only with
+		// bytes that exist.
 		if count < 0 {
 			return hdr, out, fmt.Errorf("avro: negative block record count %d (corrupt block)", count)
 		}
 		if size < 0 {
 			return hdr, out, fmt.Errorf("avro: negative block size %d (corrupt block)", size)
 		}
-		payload, err := io.ReadAll(io.LimitReader(br, size))
+		// The block is decoded out of the window the framing was read from: one
+		// copy of the file's bytes, and the records are cut from it in place.
+		payload, err := d.raw(size)
 		if err != nil {
+			if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+				return hdr, out, fmt.Errorf("avro: block truncated: %d of %d bytes: %w",
+					len(d.buf)-d.pos, size, io.ErrUnexpectedEOF)
+			}
 			return hdr, out, err
-		}
-		if int64(len(payload)) != size {
-			return hdr, out, fmt.Errorf("avro: block truncated: %d of %d bytes: %w",
-				len(payload), size, io.ErrUnexpectedEOF)
 		}
 		if hdr.Codec == CodecDeflate {
 			fr := flate.NewReader(bytes.NewReader(payload))
@@ -174,7 +177,7 @@ func ReadOCF[T any](r io.Reader, unmarshal Unmarshal[T]) (OCFHeader, []T, error)
 			}
 			payload = dec
 		}
-		bd := NewDecoder(bytes.NewReader(payload))
+		bd := newWindowDecoder(payload)
 		for i := int64(0); i < count; i++ {
 			rec, err := unmarshal(bd)
 			if err != nil {
@@ -182,19 +185,18 @@ func ReadOCF[T any](r io.Reader, unmarshal Unmarshal[T]) (OCFHeader, []T, error)
 			}
 			out = append(out, rec)
 		}
-		var sync [16]byte
-		if _, err := io.ReadFull(br, sync[:]); err != nil {
+		blockSync, err := d.raw(16)
+		if err != nil {
 			return hdr, out, err
 		}
-		if sync != hdr.sync {
+		if !bytes.Equal(blockSync, hdr.sync[:]) {
 			return hdr, out, errors.New("avro: sync marker mismatch (corrupt block)")
 		}
 	}
 }
 
 // readMetaMap decodes the OCF header's map<bytes>, handling multi-block maps.
-func readMetaMap(br *bufio.Reader) (map[string][]byte, error) {
-	d := NewDecoder(br)
+func readMetaMap(d *Decoder) (map[string][]byte, error) {
 	out := map[string][]byte{}
 	for {
 		count, err := d.Long()

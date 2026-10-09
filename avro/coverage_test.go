@@ -282,3 +282,91 @@ func TestWriteOCFSyncMarkerFailure(t *testing.T) {
 		t.Errorf("wrote %d bytes despite failing to make a sync marker", buf.Len())
 	}
 }
+
+// stalledReader is an io.Reader that never fails and never delivers: (0, nil)
+// is legal for io.Reader, and bufio used to be what stopped a decoder
+// believing it forever. The window has to make that promise itself.
+type stalledReader struct{}
+
+func (stalledReader) Read([]byte) (int, error) { return 0, nil }
+
+func TestDecoderGivesUpOnAReaderThatMakesNoProgress(t *testing.T) {
+	if _, err := NewDecoder(stalledReader{}).Double(); !errors.Is(err, io.ErrNoProgress) {
+		t.Fatalf("Double on a reader that returns (0, nil) forever: err = %v, want io.ErrNoProgress", err)
+	}
+}
+
+// An array longer than the decoder's window has to be decoded in instalments:
+// the window fills, is drained, and refills. Smaller arrays never cross that
+// seam, so without this the refill-mid-array path is never taken.
+func TestFloat64ArrayLongerThanTheWindow(t *testing.T) {
+	in := make([]float64, 4*minWindow/8) // several windows' worth
+	for i := range in {
+		in[i] = float64(i) * 1.5
+	}
+	e := NewEncoder()
+	e.Float64Array(in)
+	// byteAtATime forces the seam to land in the middle of a value as well as
+	// between values.
+	for name, r := range map[string]io.Reader{
+		"whole reader":    bytes.NewReader(e.Bytes()),
+		"one byte a time": oneByteAtATime(e.Bytes()),
+	} {
+		got, err := NewDecoder(r).Float64Array()
+		if err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(got) != len(in) {
+			t.Fatalf("%s: %d values, want %d", name, len(got), len(in))
+		}
+		for i := range in {
+			if got[i] != in[i] {
+				t.Fatalf("%s: [%d] = %v, want %v", name, i, got[i], in[i])
+			}
+		}
+	}
+}
+
+// oneByteAtATime yields one byte per Read, which is the worst case for a
+// window: every multi-byte value straddles a refill.
+func oneByteAtATime(b []byte) io.Reader { return &oneByteReader{b} }
+
+type oneByteReader struct{ b []byte }
+
+func (r *oneByteReader) Read(p []byte) (int, error) {
+	if len(r.b) == 0 {
+		return 0, io.EOF
+	}
+	if len(p) == 0 {
+		return 0, nil
+	}
+	p[0] = r.b[0]
+	r.b = r.b[1:]
+	return 1, nil
+}
+
+// The mirror of BUG-AVRO-3's understated count: a count that has drifted UP
+// promises records the block does not contain. That must be an error, not the
+// records it managed to decode.
+func TestOCFOverstatedBlockCountErrors(t *testing.T) {
+	recs := sampleEvents()
+	var buf bytes.Buffer
+	if err := WriteOCF(&buf, testSchema, CodecNull, recs, marshalEv); err != nil {
+		t.Fatalf("WriteOCF: %v", err)
+	}
+	orig := buf.Bytes()
+	payloadLen := len(blockPayload(t, orig))
+	sz := NewEncoder()
+	sz.Long(int64(payloadLen))
+	countByte := len(orig) - 16 - payloadLen - len(sz.Bytes()) - 1
+
+	c := append([]byte(nil), orig...)
+	if c[countByte] != 0x06 { // zigzag(3)
+		t.Fatalf("expected the block count byte to be 0x06, got %#x", c[countByte])
+	}
+	c[countByte] = 0x08 // zigzag(4): one record more than the block holds
+
+	if _, _, err := ReadOCF(bytes.NewReader(c), unmarshalEv); err == nil {
+		t.Fatal("ReadOCF accepted a block count larger than the block's contents")
+	}
+}
