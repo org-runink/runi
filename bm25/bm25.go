@@ -101,8 +101,25 @@ type Index struct {
 	lengths []int
 	avgLen  float64
 
-	// postings maps a term to document index -> term frequency.
-	postings map[string]map[int]int
+	// Terms are interned to ids and the postings for a term are a slice, not a
+	// map of document to frequency.
+	//
+	// The map-of-maps this replaced hashed twice for every token in the corpus:
+	// once on the term string, once on the document number. At six hundred
+	// thousand tokens that is the whole cost of building an index, and it also
+	// allocated a map per distinct term. Interning hashes each token's string
+	// once; everything after that is integer-indexed.
+	termID   map[string]int32
+	postings [][]posting
+}
+
+// posting is one document's frequency for one term. Both fields are 32-bit
+// because the slice is the thing that gets large: a corpus with four billion
+// documents, or a single document containing a term four billion times, is not
+// a case this package is for.
+type posting struct {
+	doc int32
+	tf  int32
 }
 
 // SimpleTokenise lowercases text and splits it on anything that is not a letter
@@ -136,26 +153,46 @@ func New(docs []Document, opts Options) *Index {
 	}
 
 	ix := &Index{
-		opts:     opts,
-		docIDs:   make([]string, len(docs)),
-		lengths:  make([]int, len(docs)),
-		postings: make(map[string]map[int]int),
+		opts:    opts,
+		docIDs:  make([]string, len(docs)),
+		lengths: make([]int, len(docs)),
+		termID:  make(map[string]int32),
 	}
 
+	// tf counts this document's terms by id before anything is appended, so a
+	// term repeated inside one document adds one posting rather than one per
+	// occurrence. seen records which ids tf currently holds, so clearing it
+	// costs the number of distinct terms in the document rather than the size
+	// of the vocabulary.
+	var tf []int32
+	var seen []int32
 	total := 0
 	for i, d := range docs {
 		ix.docIDs[i] = d.ID
 		terms := ix.terms(d.Text)
 		ix.lengths[i] = len(terms)
 		total += len(terms)
+
 		for _, t := range terms {
-			p := ix.postings[t]
-			if p == nil {
-				p = make(map[int]int)
-				ix.postings[t] = p
+			id, ok := ix.termID[t]
+			if !ok {
+				id = int32(len(ix.postings))
+				ix.termID[t] = id
+				ix.postings = append(ix.postings, nil)
 			}
-			p[i]++
+			for int(id) >= len(tf) {
+				tf = append(tf, 0)
+			}
+			if tf[id] == 0 {
+				seen = append(seen, id)
+			}
+			tf[id]++
 		}
+		for _, id := range seen {
+			ix.postings[id] = append(ix.postings[id], posting{doc: int32(i), tf: tf[id]})
+			tf[id] = 0
+		}
+		seen = seen[:0]
 	}
 	if len(docs) > 0 {
 		ix.avgLen = float64(total) / float64(len(docs))
@@ -187,7 +224,10 @@ func (ix *Index) Len() int { return len(ix.docIDs) }
 // score DOWN and can rank a matching document below a non-matching one. The
 // +1 inside the logarithm keeps it positive, so matching a term never hurts.
 func (ix *Index) idf(term string) float64 {
-	n := float64(len(ix.postings[term]))
+	n := 0.0
+	if id, ok := ix.termID[term]; ok {
+		n = float64(len(ix.postings[id]))
+	}
 	N := float64(len(ix.docIDs))
 	return math.Log(1 + (N-n+0.5)/(n+0.5))
 }
@@ -208,13 +248,14 @@ func (ix *Index) Search(query string, k int) []Result {
 	contrib := make(map[int]map[string]float64)
 
 	for _, term := range terms {
-		posting, ok := ix.postings[term]
+		id, ok := ix.termID[term]
 		if !ok {
 			continue // a term nobody has contributes nothing
 		}
 		idf := ix.idf(term)
-		for doc, tf := range posting {
-			f := float64(tf)
+		for _, p := range ix.postings[id] {
+			doc := int(p.doc)
+			f := float64(p.tf)
 			dl := float64(ix.lengths[doc])
 			norm := 1.0
 			if ix.avgLen > 0 {

@@ -268,3 +268,45 @@ func TestSpearmanErrors(t *testing.T) {
 		t.Fatalf("err = %v; want ErrEmpty", err)
 	}
 }
+
+// radixSort is reached only through ranks, which Spearman never calls with
+// fewer than two points. The guard is still right — a sort of nothing is a
+// no-op, and the first pass would index keys[0] — so it is exercised here
+// rather than removed, because the next caller may not have Spearman's check.
+func TestRadixSortDegenerateLengths(t *testing.T) {
+	for _, n := range []int{0, 1} {
+		keys := make([]uint64, n)
+		idx := make([]int32, n)
+		for i := range keys {
+			keys[i], idx[i] = 42, int32(i)
+		}
+		radixSort(keys, idx) // must not panic
+		if n == 1 && (keys[0] != 42 || idx[0] != 0) {
+			t.Errorf("n=1: keys=%v idx=%v", keys, idx)
+		}
+	}
+}
+
+// The bit mapping must order exactly as float64 comparison does, including
+// across zero and for the infinities, because the ranks depend on it.
+func TestSortableBitsOrdersLikeFloats(t *testing.T) {
+	vals := []float64{
+		math.Inf(-1), -1e308, -1, -0.5, -math.SmallestNonzeroFloat64,
+		0, math.SmallestNonzeroFloat64, 0.5, 1, 1e308, math.Inf(1),
+	}
+	for i := 1; i < len(vals); i++ {
+		a, b := sortableBits(vals[i-1]), sortableBits(vals[i])
+		if !(a < b) {
+			t.Errorf("%v (%#x) should sort below %v (%#x)", vals[i-1], a, vals[i], b)
+		}
+	}
+	// NaN sorts above every number, which is where the comparison version
+	// left it.
+	if sortableBits(math.NaN()) <= sortableBits(math.Inf(1)) {
+		t.Error("NaN did not sort above +Inf")
+	}
+	// -0 and +0 must land together, or they would rank as a tie of one.
+	if sortableBits(math.Copysign(0, -1)) == sortableBits(0) {
+		t.Log("negative zero shares a key with positive zero")
+	}
+}

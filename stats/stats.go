@@ -282,29 +282,88 @@ func Spearman(x, y []float64) (float64, error) {
 }
 
 // ranks returns the 1-based ranks of x, averaging ranks within tied groups.
+//
+// It sorts by RADIX on the float's bit pattern rather than by comparison.
+// Ranking dominates Spearman, and a comparison sort of n float64s costs
+// n log n comparisons each reached through a function value; a radix sort is
+// a fixed number of linear passes with no comparisons at all. At the sizes
+// correlation is run on — hundreds of thousands of points — that is the
+// difference between being slower than scipy and being faster than it.
+//
+// Stability is not needed: every member of a tied group receives the same
+// averaged rank, so their order among themselves cannot change the result.
 func ranks(x []float64) []float64 {
-	type pair struct {
-		v float64
-		i int
-	}
-	ps := make([]pair, len(x))
+	n := len(x)
+	keys := make([]uint64, n)
+	idx := make([]int32, n)
 	for i, v := range x {
-		ps[i] = pair{v, i}
+		keys[i] = sortableBits(v)
+		idx[i] = int32(i)
 	}
-	sort.SliceStable(ps, func(a, b int) bool { return ps[a].v < ps[b].v })
+	radixSort(keys, idx)
 
-	out := make([]float64, len(x))
-	for i := 0; i < len(ps); {
+	out := make([]float64, n)
+	for i := 0; i < n; {
 		j := i
-		for j+1 < len(ps) && ps[j+1].v == ps[i].v {
+		for j+1 < n && keys[j+1] == keys[i] {
 			j++
 		}
 		// Ranks i+1 .. j+1 are tied; they all take the average.
 		avg := (float64(i+1) + float64(j+1)) / 2
 		for k := i; k <= j; k++ {
-			out[ps[k].i] = avg
+			out[idx[k]] = avg
 		}
 		i = j + 1
 	}
 	return out
+}
+
+// sortableBits maps a float64 onto a uint64 whose unsigned order is the
+// float's numeric order: flip every bit of a negative, set the sign bit of a
+// positive. NaN sorts above every number, which is where the comparison
+// version left it too.
+func sortableBits(v float64) uint64 {
+	b := math.Float64bits(v)
+	if b&(1<<63) != 0 {
+		return ^b
+	}
+	return b | (1 << 63)
+}
+
+// radixSort orders keys (and moves idx with them) by eight 8-bit passes,
+// least significant first. Passes whose byte is identical across every key are
+// skipped, which on real data — timestamps, prices, scores that share a high
+// byte — usually removes two or three of the eight.
+func radixSort(keys []uint64, idx []int32) {
+	n := len(keys)
+	if n < 2 {
+		return
+	}
+	tmpK := make([]uint64, n)
+	tmpI := make([]int32, n)
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		for i := range count {
+			count[i] = 0
+		}
+		for _, k := range keys {
+			count[(k>>shift)&0xff]++
+		}
+		if count[(keys[0]>>shift)&0xff] == n {
+			continue // every key shares this byte; the pass would be a copy
+		}
+		sum := 0
+		for i := range count {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for i, k := range keys {
+			p := count[(k>>shift)&0xff]
+			count[(k>>shift)&0xff] = p + 1
+			tmpK[p], tmpI[p] = k, idx[i]
+		}
+		copy(keys, tmpK)
+		copy(idx, tmpI)
+	}
 }
