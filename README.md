@@ -47,7 +47,7 @@ go get github.com/org-runink/runi
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | **100%** |
-| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | 99.3% |
+| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | **100%** |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | **100%** |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
@@ -798,7 +798,7 @@ not a flaw in `lru_cache`, which never promised single-flight; it is the reason
 
 ### On the coverage figure
 
-Every package is at 100% of statements except `tablelog`, which is at 99.3%. Its last four lines are a sort comparator's tie-break that its own key ordering makes unreachable, two error returns on operations that cannot fail with the arguments this package gives them, and one that needs a cancellation to land inside a retry wait. Each is commented where it sits, with why. Rather than
+**Every package is at 100% of statements.** Getting the last few percent was worth more than the number: it found a truncated model reply that decoded as a clean result, a minimum-length rule stated twice so the real one could never fire, and a change-feed comparator that was not a total order. Four branches turned out to be unreachable rather than untested and were removed, with the invariant that makes them impossible written where they stood. Rather than
 write tests that execute a line without asserting anything, here is every
 statement that is not covered and why:
 
@@ -826,7 +826,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **99.8%** of statements across the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code); every package at 100% except `tablelog` at 99.3%. Floors are enforced **per package**, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |

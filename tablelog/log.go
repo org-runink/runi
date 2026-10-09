@@ -356,7 +356,7 @@ func (t *Table) commit(ctx context.Context, a action) (int64, error) {
 		if e.Remove == nil {
 			e.Remove = []string{}
 		}
-		body, err := json.Marshal(e)
+		body, err := marshalLogEntry(e)
 		if err != nil {
 			// Not reachable: logEntry is strings, ints and slices of those.
 			// Checked rather than ignored because the day someone adds a field
@@ -407,3 +407,10 @@ func (t *Table) backoff(ctx context.Context, attempt int) error {
 // writeRowsOCF: the failure is real but unreachable from a caller, and a
 // checkpoint that cannot be encoded must not be reported as written.
 var writeCPOCF = avro.WriteOCF[fileEntry]
+
+// marshalLogEntry serialises a log entry. It is a variable so the failure can
+// be exercised: logEntry holds only strings, ints and slices of those today, so
+// nothing a caller does makes this fail, but the commit must refuse rather than
+// write an empty log object if that ever changes. An error that is returned and
+// never run is not known to work.
+var marshalLogEntry = func(e *logEntry) ([]byte, error) { return json.Marshal(e) }
