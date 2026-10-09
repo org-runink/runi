@@ -2,31 +2,31 @@
   "library": "statsmodels",
   "version": "0.15.0",
   "estimator": "exact MLE via Kalman filter (SARIMAX default)",
-  "import_seconds": 2.062642237986438,
+  "import_seconds": 0.7046012099890504,
   "accuracy": {
     "trials": 200,
-    "seconds_total": 7.279467758024111,
-    "seconds_per_fit": 0.036397338790120554,
-    "beta_bias": 0.0022876605441899713,
-    "beta_rmse": 0.033605696994027094,
-    "phi_bias": -0.004065701267029039,
-    "phi_rmse": 0.05062081361153975,
+    "seconds_total": 3.121407177997753,
+    "seconds_per_fit": 0.015607035889988765,
+    "beta_bias": 0.0022876605958066843,
+    "beta_rmse": 0.03360569693354694,
+    "phi_bias": -0.0040657012897283365,
+    "phi_rmse": 0.05062081363858576,
     "coverage_pct": 94.5,
     "coverage_points": 1200,
-    "forecast_rmse": 1.31601206983942,
+    "forecast_rmse": 1.316012069953731,
     "naive_rmse": 3.710474096197225
   },
   "timing": {
     "500": {
-      "seconds_median": 0.03332866047276184,
+      "seconds_median": 0.01505674199142959,
       "reps": 10
     },
     "2000": {
-      "seconds_median": 0.11042345396708697,
+      "seconds_median": 0.051126671984093264,
       "reps": 10
     },
     "10000": {
-      "seconds_median": 0.5108345659682527,
+      "seconds_median": 0.2603436989884358,
       "reps": 3
     }
   }

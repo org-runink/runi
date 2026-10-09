@@ -35,6 +35,14 @@
 **A data toolkit for Go: explore it, forecast it, search it, and make it fast.**
 Standard library only — no dependencies, in any package.
 
+The point is not that it is faster than Python. It is that work you currently
+do *somewhere else* — a nightly batch, an embedding service, a cluster round
+trip, a sidecar — fits inside the handler that needs it. A forecast fits per
+tenant in half a millisecond with no import cost; 5,000 documents rank with no
+model and no GPU; 64 callers hitting one cold key run the expensive function
+once. [Whether any of that is worth it to you](#does-this-change-anything-for-you),
+including the cases where it is not, is argued with measurements further down.
+
 ```bash
 go get github.com/org-runink/runi
 ```
@@ -88,6 +96,7 @@ you are still the one doing the work.
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
+| 🔐 **the collar** | [`certissue`](#runicertissue--short-lived-certificates-the-ca-key-out-of-reach) | Papers that say who he is at every gate, and expire before anyone else can use them |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -126,7 +135,7 @@ usually the one that decides whether there is a second. Here is the map.
 `pd.read_sql`, and nothing in this module will ever train a neural network.
 
 **What you get:** a 6 MB static binary with no runtime and no dependency tree,
-fits that are [42–54× faster than statsmodels](#against-the-python-reference-implementations)
+fits that are [29–37× faster than statsmodels](#forecasting-head-to-head-with-statsmodels)
 at the same interval calibration, and real parallelism — `lazy.All` over five
 80 ms values finishes in 81 ms, not 400 ms, with no GIL to work around.
 
@@ -467,9 +476,9 @@ Keys are sorted, values type-tagged, lengths prefixed.
 
 | | ns/op | allocs/op |
 |---|---:|---:|
-| hit | **14.34** | **0** |
-| miss | 694.2 | 5 |
-| 64-caller stampede, cold key | 24,324 | 75 |
+| hit | **20.06** | **0** |
+| miss | 847.1 | 6 |
+| 64-caller stampede, cold key | 29,425 | 75 |
 
 ## `runi/lazy` — deferred values you can start early
 
@@ -497,8 +506,8 @@ consumers of one source share a single evaluation.
 
 | | ns/op | allocs/op |
 |---|---:|---:|
-| `Get` on a resolved value | 73.91 | 0 |
-| `New` + resolve | 771.1 | 3 |
+| `Get` on a resolved value | 38.82 | **0** |
+| `New` + resolve | 645.7 | 3 |
 
 Panics become an error wrapping `ErrPanic` rather than crashing whichever
 goroutine happened to be forcing the value.
@@ -612,74 +621,191 @@ in the package:
 
 ## Benchmarks
 
-### Against the Python packages people reach for first
+### Against the libraries people actually reach for
 
-Measured on one machine (ASUS Ascent GX10, 20 cores, aarch64), same data, same
-session. The full method, every case, and **the three where `runi` loses** are
-in [benchmarks/README.md](benchmarks/README.md).
+One machine, one session, same inputs on both sides: an ASUS Ascent GX10
+(GB10), 20 cores, aarch64, Go 1.27.2, Python 3.12.3, with one core busy on
+unrelated work throughout. Each figure is the **median of five runs** for `runi`
+and three for Python, each of which is itself a median over repetitions.
 
-| Operation | `runi` | Python | |
-|---|---|---|---|
-| ARIMAX fit, n=10,000 | **7.41 ms** | 257.13 ms — statsmodels | **35× faster** |
-| OLS trend + t-test, n=100,000 | **0.15 ms** | 8.98 ms — scipy | **58× faster** |
-| Avro OCF write, 20,000 rows | **1.61 ms** | 15.04 ms — fastavro | **9.4× faster** |
-| BM25 query ×200 | **84.9 ms** | 737.5 ms — rank-bm25 | **8.7× faster** |
-| Pearson, n=200,000 | **0.68 ms** | 3.00 ms — scipy | **4.4× faster** |
-| Seasonal decomposition | 1.69 ms | **0.18 ms** — statsmodels | **9.4× slower** |
-| Spearman, n=200,000 | 243.9 ms | **33.1 ms** — scipy | **7.4× slower** |
-| BM25 index build | 177.9 ms | **85.6 ms** — rank-bm25 | **2.1× slower** |
+Reproduce it with `python benchmarks/baselines.py` and
+`go run ./benchmarks/crossbench`; the method is in
+[benchmarks/README.md](benchmarks/README.md). The `results_*.json` files
+committed beside them are **one** of those runs, not the median — a single run
+of the sub-millisecond rows lands anywhere in the spread noted below, which is
+the whole reason the tables quote medians.
 
-Speed is the easy half. On 200 trials against statsmodels, `arimax` matches its
-**prediction-interval coverage exactly (94.5%)** and its forecasts to within
-**0.07% RMSE** — but its **regression coefficients are twice as noisy**,
-because it fits by conditional sum of squares rather than exact maximum
-likelihood. If you need the coefficients rather than the forecast, use
-statsmodels. That gap is the open work here.
+| Operation | `runi` | The library people use | |
+|---|---:|---:|---|
+| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33× faster** |
+| Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — `fastavro` | **8.9× faster** |
+| BM25, 200 queries over 5,000 docs | **79.0 ms** | 648.5 ms — `rank_bm25` | **8.2× faster** |
+| Pearson, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8× faster** |
+| Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6× faster** |
+| Spearman, n=200,000 | **17.9 ms** | 34.0 ms — `scipy.stats.spearmanr` | **1.9× faster** |
+| Index 5,000 docs | **65.4 ms** | 91.2 ms — `rank_bm25` | **1.4× faster** |
+| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — `fastavro` | **1.1× faster** |
+| Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — `statsmodels` | **9.5× slower** |
+
+The Avro file is also 740,202 bytes against fastavro's 741,181 — the same data,
+0.13% smaller, each readable by the other.
+
+**On the absolutes:** the sub-millisecond rows move by up to ±40% between runs
+on this host, so the ratios are the claim and the absolutes are context. `trend`
+was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms.
+Figures that *are* deterministic — allocation counts, file sizes, and every
+accuracy number below — are stated as facts.
+
+**The seasonal row is the one honest loss, and making it a fair fight took
+work.** `statsmodels.seasonal_decompose` is told the period and computes a
+centred moving average. Our default `Decompose` is told the period and *also*
+runs a BIC-priced search for trend breaks, which `seasonal_decompose` does not
+do at all — so comparing the two measured a larger job and reported the
+difference as our loss. The benchmark now disables the break search for the
+comparison, which is like for like, and reports the extra work separately:
+
+| `season.Decompose`, n=4,000 | |
+|---|---:|
+| Period given, no break search — *the operation statsmodels performs* | **1.74 ms** |
+| …plus the BIC changepoint search (the default) | 18.5 ms |
+| …plus detecting the period instead of being told it | 55.4 ms |
+| `season.Period` detection on its own | 4.32 ms |
+
+So: if you know your period and want the classical decomposition, statsmodels
+is 9.5× faster and the right tool. What `season` offers is the three things the
+moving average cannot — it finds the period, it finds where the trend broke, and
+it extrapolates — and those cost what they cost.
+
+Two other rows used to go the wrong way, and fixing them is why they no longer
+do. `Spearman` was 243.9 ms because `ranks` sorted through `sort.SliceStable` —
+reflection-based swaps, an interface call per comparison, and stability it did
+not need, since tied ranks are averaged. It now sorts by radix on the float's
+bit pattern. The BM25 index was 177.9 ms because it hashed every token twice and
+allocated a map per document; terms are now interned once into flat postings.
+Neither was a limit of the language.
+
+### Forecasting, head to head with `statsmodels`
+
+Time-series forecasting is Python's home ground, so the useful question is not
+whether Go can do it but what you give up. 200 independent synthetic series,
+AR(1) errors, one exogenous regressor, n=500, h=6, **both libraries reading the
+same CSVs written once by `benchmarks/gen.py`**.
+
+The control is `naive_rmse`, the error of carrying the last value forward: it
+depends on the data and on neither library. It came out to
+**3.7104740961972245** on both sides, to every digit, which is how we know the
+two were fitted to identical numbers.
+
+| | `runi/arimax` | `statsmodels` SARIMAX | |
+|---|---:|---:|---|
+| Fit, n=500 | **0.406 ms** | 15.06 ms | **37× faster** |
+| Fit, n=2,000 | **1.77 ms** | 51.13 ms | **29× faster** |
+| Fit, n=10,000 | **7.92 ms** | 260.3 ms | **33× faster** |
+| Per fit over the 200-trial run | **0.531 ms** | 15.61 ms | **29× faster** |
+| Start-up before the first fit | **0 ms** (compiled in) | 705 ms | |
+| | | | |
+| 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
+| Forecast RMSE, h=6 | 1.31694 | 1.31601 | within **0.07%** |
+| Forecast RMSE vs the naive control | **2.82× better** | 2.82× better | same skill |
+| φ (AR) bias / RMSE | −0.00419 / 0.05084 | −0.00407 / 0.05062 | indistinguishable |
+| β (exogenous) bias / RMSE | −0.00293 / 0.06662 | +0.00229 / **0.03361** | **statsmodels 2.0× better** |
+| Naive RMSE *(control — must match)* | 3.7104740961972245 | 3.7104740961972245 | ✅ |
+
+**Read the β row before the speed rows.** statsmodels recovers the exogenous
+coefficient **twice as precisely**. That is not noise and not a bug — it is the
+price of the estimator. statsmodels runs exact maximum likelihood through a
+Kalman filter; `arimax` fits a staged regression with ARIMA errors by
+conditional sum of squares. The staged fit is what makes it ~30× faster, and it
+costs real precision in β.
+
+What is genuinely equivalent is the part a decision turns on: the forecasts
+agree to 0.07% in six-step RMSE, both beat the naive control by the same 2.82×,
+and both deliver 94.5% empirical coverage against a nominal 95%. An interval
+claiming 95% and delivering 70% is worse than no interval, because it invites
+confident wrong answers.
+
+| Use `statsmodels` when | Use `runi/arimax` when |
+|---|---|
+| You need the coefficient itself — it is the finding, as in econometrics | You need the forecast, and the coefficient is a means to it |
+| You want exact MLE, diagnostics, SARIMA, state space, a vast library | You want ARIMAX, fast, with calibrated intervals |
+| You are in a notebook and 0.7 s of import does not matter | You are in a service, fitting per request or per tenant |
+| You want the ecosystem Python has and Go does not | You want one static binary, no runtime, no dependency tree |
+
+A fit every 0.531 ms rather than every 15.6 ms is what changes architecture: not
+a leaderboard position, but the difference between a nightly batch that writes
+forecasts to a table and **fitting a fresh model inside the request that needs
+it**, per tenant, per series, on demand.
+
+### Caching, head to head with `functools.lru_cache`
+
+`lru_cache` is the API that inspired `memo`. Same experiment on both sides: N
+callers hit one cold key simultaneously, the function takes 5 ms, and what is
+counted is **how many times the function actually ran**.
+
+| | `runi/memo` | `functools.lru_cache` |
+|---|---:|---:|
+| Cache hit | **19.6 ns** | 36.6 ns |
+| Cache miss | 725 ns | **82 ns** |
+| 8 cold callers → **times the function ran** | **1** | **8** |
+| 64 cold callers → **times the function ran** | **1** | **64** |
+| Wall clock, 64 cold callers | **5.75 ms** | 13.17 ms |
+| TTL | ✅ | ❌ |
+| Single-flight | ✅ | ❌ |
+
+The hit is 1.9× faster and **the miss is 8.8× slower** — `lru_cache`'s miss is a
+dict insert keyed on the argument tuple's hash, while ours canonicalises a
+structured key and maintains an LRU list and expiry. That is a real loss and it
+is in the table.
+
+The row that matters is the count. With 64 callers on a cold key, `lru_cache`
+calls the expensive function **64 times** and `memo` calls it **once**. If that
+function is a model inference or a metered API call, the difference is not 8.8×
+on a nanosecond — it is 64× on the expensive thing. This is not a flaw in
+`lru_cache`, which never promised single-flight; it is why `memo` builds it in
+instead of leaving it to the caller.
 
 ### Next to a warehouse engine
 
-`runi` does not replace Spark, Databricks or Snowflake. It removes the round
-trip for work too small to deserve one. The same correlation over 200,000 rows:
+`runi` does not replace Spark, Databricks or Snowflake, and nothing here
+suggests it could. It removes the round trip for work too small to deserve one.
+The same correlation over 200,000 rows, on the same 20-core machine:
 
 | | Time |
-|---|---|
-| `runi/stats` | **0.68 ms** |
-| scipy | 3.00 ms |
-| SparkML, warm session | 470 ms |
-| SparkML, including session start | 3.42 s |
+|---|---:|
+| `runi/stats` | **1.06 ms** |
+| `scipy.stats.pearsonr` | 2.99 ms |
+| SparkML, warm session | 408.7 ms |
+| SparkML, including session start | 3.18 s |
 
-**692× on compute**, and about 5,000× once you count the session a caller
-actually pays for. Spark earns that back when the data does not fit on one
-machine; at this size it does, and it spent 7.2 seconds building a DataFrame
-for a calculation that takes under a millisecond.
+**387× on compute**, and about **3,000×** once a caller pays for the session.
+Spark earns all of that back the moment the data stops fitting on one machine.
+At this size it fits, and it spent 7.0 s building a DataFrame for a calculation
+that takes about a millisecond. The Spark figures are a single run, not a
+median — session start-up is not something repetition makes more precise.
 
 ### Go benchmarks
 
-Every figure below is produced by `go test` in this repository and reproduces with:
+Every figure below is produced by `go test` in this repository and reproduces
+with:
 
 ```bash
-go test -bench . -benchmem -benchtime=200x ./...
+go test -bench . -benchmem -benchtime=1s ./...
 go test -run 'TestParameterRecovery|TestIntervalCoverage|TestForecastBeatsNaive' -v ./arimax
 ```
 
 ```
-goos: linux   goarch: amd64   cpu: AMD Ryzen 7 8840U
+goos: linux   goarch: arm64   ASUS Ascent GX10 (GB10), 20 cores   go1.27.2
 ```
 
-> **These are dev-laptop figures, not capacity numbers.** One unpinned machine,
-> no quiet-system tuning.
+> **The same machine as every other number in this README**, so the figures here
+> and the head-to-heads above can be read against each other. One core was busy
+> with unrelated work throughout.
 >
-> **Read the `ns/op` columns as approximate.** Repeating a benchmark on this
-> machine moves wall-clock time by up to ±30% — `ACF`, for instance, was observed
-> between 199 µs and 306 µs across four runs — because the host is a laptop with
-> frequency scaling and other work on it. The figures below are each a single
-> honest run, quoted at the precision Go prints rather than the precision they
-> carry. **`B/op` and `allocs/op` are deterministic** and repeat exactly, which is
-> why the allocation claims in this README are the ones stated as facts.
->
-> Use these to compare *shapes* — how cost grows with n, how many allocations a
-> call makes — not to size a deployment. Run them on your own hardware if a
-> number matters to a decision.
+> **Read the `ns/op` columns as approximate** and use them to compare *shapes* —
+> how cost grows with n, how many allocations a call makes — not to size a
+> deployment. **`B/op` and `allocs/op` are deterministic** and repeat exactly,
+> which is why the allocation claims in this README are the ones stated as
+> facts. Run them on your own hardware if a number matters to a decision.
 
 ### `runi/arimax` — accuracy
 
@@ -716,37 +842,38 @@ in these intervals.
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| `Fit` ARIMAX(1,0,1)+1 regressor, n=100 | 182,294 | 148,018 | 321 |
-| `Fit` n=500 | 659,162 | 489,577 | 235 |
-| `Fit` n=2,000 | 2,275,325 | 2,033,850 | 245 |
-| `Fit` n=10,000 | 12,309,872 | 10,324,230 | 249 |
-| `Forecast` 24 steps | 11,830 | 72,065 | 10 |
-| `ACF` 40 lags, n=5,000 | 305,932 | 761 | **1** |
-| `olsQR` n=5,000, 9 columns | 879,839 | 409,682 | 11 |
+| `Fit` ARIMAX(1,0,1)+1 regressor, n=100 | 126,268 | 148,001 | 321 |
+| `Fit` n=500 | 416,641 | 489,606 | 235 |
+| `Fit` n=2,000 | 1,650,162 | 2,033,969 | 246 |
+| `Fit` n=10,000 | 7,534,222 | 10,324,914 | 255 |
+| `Forecast` 24 steps | 20,541 | 72,071 | 10 |
+| `ACF` 40 lags, n=5,000 | 111,846 | 359 | **1** |
+| `olsQR` n=5,000, 9 columns | 640,912 | 409,710 | 11 |
 
-`Fit` is linear in n — 20× the data for 18.7× the time — and allocation count is
-flat from n=500 upward, because work per optimiser iteration is independent of
-series length. Fit once, forecast often: forecasting is ~12 µs.
+`Fit` is linear in n — 20× the data for **18.1×** the time — and the allocation
+count is flat from n=500 upward, because work per optimiser iteration does not
+depend on series length. Fit once, forecast often: forecasting 24 steps is
+~20 µs, and `ACF` over 5,000 points makes **one** allocation.
 
 ### `runi/memo`
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| `Do` — hit | **14.34** | 0 | **0** |
-| `Do` — miss (store + LRU insert) | 694.2 | 358 | 5 |
-| `Do` — hit, `RunParallel` 16 threads | 134.9 | 9 | 0 |
-| `Hash` — 4-field map | 1,579 | 656 | 36 |
-| stampede, 8 concurrent cold callers | 5,332 | 1,287 | 19 |
-| stampede, 64 concurrent cold callers | 24,324 | 4,136 | 75 |
+| `Do` — hit | **20.06** | 0 | **0** |
+| `Do` — miss (store + LRU insert) | 847.1 | 343 | 6 |
+| `Do` — hit, `RunParallel` 20 threads | 161.0 | 0 | **0** |
+| `Hash` — 4-field map | 1,338 | 656 | 36 |
+| stampede, 8 concurrent cold callers | 4,502 | 1,232 | 19 |
+| stampede, 64 concurrent cold callers | 29,425 | 3,922 | 75 |
 
 The hit path allocates nothing, so the cache is free relative to anything worth
-memoizing. **The parallel hit is 135 ns, not 14** — `Store` takes one mutex per
-operation. That is stated rather than omitted: at ~7M hits/s aggregate it is far
-from the bottleneck for network or model calls, and disqualifying if you are
+memoizing. **The parallel hit is 161 ns, not 20** — `Store` takes one mutex per
+operation. That is stated rather than omitted: at ~6M hits/s aggregate it is far
+from the bottleneck for a network or model call, and disqualifying if you are
 memoizing sub-microsecond work.
 
-The stampede row is the case single-flight exists for: 64 goroutines on a cold
-key cost 24 µs and **one** execution of the function.
+The stampede rows are the case single-flight exists for: 64 goroutines on a cold
+key cost 29 µs and **one** execution of the function.
 
 ### `runi/lazy`
 
@@ -755,14 +882,18 @@ key cost 24 µs and **one** execution of the function.
 | `Get` on a cold value | 122 ms |
 | `Get` after `Start` had time to run | **8 µs** |
 | `All` over five 80 ms values | **81 ms** (serial: 400 ms) |
-| `Get` on a resolved value | 73.91 ns, 0 allocs |
-| `New` + resolve | 771.1 ns, 3 allocs |
-| `Map` chain of 3 | 3,602 ns, 15 allocs |
+| `Get` on a resolved value | 38.82 ns, **0 allocs** |
+| `Get` on a resolved value, 20 threads | 265.0 ns, **0 allocs** |
+| `New` + resolve | 645.7 ns, 3 allocs |
+| `Map` chain of 3 | 2,780 ns, 15 allocs |
+
+The first three rows are structural rather than hardware-dependent: `All` over
+five 80 ms values finishes in the time of the slowest one, not their sum.
 
 ### What these numbers do not show
 
-- **The head-to-head covers statsmodels, and nothing else.** See
-  [Against the Python reference implementations](#against-the-python-reference-implementations).
+- **The forecasting head-to-head covers statsmodels, and nothing else.** See
+  [Forecasting, head to head with `statsmodels`](#forecasting-head-to-head-with-statsmodels).
   No comparison against `pmdarima`, R's `forecast`, or Prophet was run, so no
   claim is made about any of them.
 - **Accuracy is measured on synthetic data**, which is correct for estimator bias
@@ -777,127 +908,104 @@ key cost 24 µs and **one** execution of the function.
 
 ---
 
-## Against the Python reference implementations
+## Proof it is right, not just fast
 
-Time-series forecasting is Python's home ground, so the useful question is not
-whether Go can do it but what you give up. We measured.
+Fast and wrong is worthless, so this is the half of the evidence that matters.
 
-**Method, because it is the only thing that makes these numbers worth reading.**
-One generator writes the datasets to CSV **once** (`benchmarks/gen.py`); both
-implementations read the same files. Same model order, ARIMAX(1,0,1) with one
-exogenous regressor. Same six-point held-out horizon. Same machine, same
-session. The control is `naive_rmse` — the error of carrying the last value
-forward, which depends only on the data and not on either library. It came out
-to **3.7104740961972245 in both**, to every digit, which is how we know the two
-were fitted to identical numbers.
+Every package was at 100% statement coverage before any of the work below. That
+says every line **ran**. It does not say every line is **right**. So each of the
+eleven packages got property-based edge testing — the standard library's
+`testing/quick` plus generated inputs, because a property library would be the
+twelfth dependency in a toolkit that advertises zero — stating the invariants an
+example test can only sample.
 
-```bash
-python benchmarks/gen.py                 # write the shared datasets
-python benchmarks/bench_statsmodels.py   # statsmodels 0.15.0
-go run ./benchmarks/runibench             # runi/arimax
-```
+That found **six real defects in code that already had full coverage.** Four
+returned a confidently wrong answer rather than an error, which is the shape of
+failure nobody notices. All six are fixed; they are listed here because a
+package that tells you what it got wrong is worth more than one that implies it
+never did.
 
-### `runi/arimax` vs `statsmodels` SARIMAX
+| Package | What was wrong | Why it mattered |
+|---|---|---|
+| `season` | `Period` reported **every cycle of 26 or more as 3** | Not "no season", which you would question — a wrong period that `Decompose` and every forecast taken from it then built on |
+| `arimax` | `PACF` **panicked** when asked for more lags than the series has points | Crashed the caller's process on the ordinary way of asking for "as many as there are" |
+| `salvage` | One stray quote in the prose *around* a value swallowed the next value | Two candidates became one, so `DecodeOne` returned an answer instead of refusing an ambiguous reply |
+| `salvage` | The trailing-data guard accepted `{"a":1}}` and `{"a":1}] [{"b":2}]` as a single value | A reply holding two answers reached the caller who asked `DecodeOne` to refuse exactly that |
+| `stats` | `Mean` overflowed to `+Inf` on values whose mean is perfectly representable | Kahan compensation cannot help when no `float64` holds the sum |
+| `budget` | `Plan.Scaled` could return a plan `New` refuses | The failure surfaced far from the `Scaled` call that caused it |
 
-200 independent series, n=500, h=6. statsmodels 0.15.0, Python 3.14, Go 1.25.
+**The `season` one is worth the detail**, because it is the kind of bug that
+survives review. The autocorrelation estimator divides a sum of `m−lag` products
+by the variance of all `m`, so what it reports tapers by about `(1 − lag/m)`,
+while a sinusoid's true autocorrelation at lag 2 is already `cos(4π/P)` — close
+to 1 for a long period. Past `P ≈ 25` the taper costs lag `P` more than the
+curve costs lag 2, the global maximum moves to lag 2, and the neighbour
+refinement settles it at 3. `Period` now takes the highest **peak** in the
+autocorrelation, which is what its own documentation already claimed. Periods 3
+to 40 now come back exactly.
 
-| | `runi/arimax` | `statsmodels` SARIMAX | |
-|---|---:|---:|---|
-| **Fit, n=500** | **0.80 ms** | 33.3 ms | **42× faster** |
-| **Fit, n=2,000** | **2.20 ms** | 110.4 ms | **50× faster** |
-| **Fit, n=10,000** | **11.7 ms** | 510.8 ms | **44× faster** |
-| Per fit, over the 200-trial run | **0.67 ms** | 36.4 ms | **54× faster** |
-| Library start-up before the first fit | **0 ms** (compiled in) | 2,063 ms | |
-| | | | |
-| 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
-| Forecast RMSE, h=6 | 1.3169 | 1.3160 | within **0.07%** |
-| φ (AR) bias / RMSE | −0.0042 / 0.0508 | −0.0041 / 0.0506 | indistinguishable |
-| β (exogenous) bias / RMSE | −0.0029 / 0.0666 | +0.0023 / **0.0336** | **statsmodels 2× better** |
-| Naive RMSE *(control — must match)* | 3.7104740961972245 | 3.7104740961972245 | ✅ |
+The same exercise found that `MinPeriodLength` was advertising a floor the
+function could not answer above: the bar a lag must clear rises as the series
+shortens while the estimator's ceiling falls, and below 28 points the bar sits
+*above* the ceiling, so no series of any shape clears it. It is now 28, the
+shortest series in which a cycle can in fact be found.
 
-**Read that last-but-one row before the speed rows.** statsmodels recovers the
-exogenous coefficient about **twice as precisely** as we do. That is not noise
-and it is not a bug — it is the price of the estimator. statsmodels runs exact
-maximum likelihood through a Kalman filter; `arimax` uses a staged regression
-with ARIMA errors fitted by conditional sum of squares. The staged approach is
-what makes it ~50× faster, and it costs real precision in β.
+### What the properties assert
 
-**What is genuinely equivalent:** the forecasts, and the honesty of the
-intervals. A 0.07% difference in six-step RMSE is not something a decision would
-turn on, and both deliver 94.5% empirical coverage against a nominal 95% — the
-number that matters when a forecast informs an action.
+These hold for every generated input, not for the handful a table lists:
 
-**So, honestly: when should you use which?**
-
-| Use `statsmodels` when | Use `runi/arimax` when |
+| Package | The invariant |
 |---|---|
-| You need the coefficient itself — it is the finding, as in econometrics | You need the forecast, and the coefficient is a means to it |
-| You want exact MLE, diagnostics, SARIMA, state space, a vast library | You want ARIMAX, fast, with calibrated intervals |
-| You are in a notebook and 2s of import does not matter | You are in a service, fitting per request or per tenant |
-| You want the ecosystem Python has and Go does not | You want one static binary, no runtime, no dependency tree |
+| `chain` | **Every** single-bit flip, deletion and swap is caught and correctly blamed — not the five an example test lists; every prefix of a chain still verifies, so a reader racing an appender is not a false alarm |
+| `bm25` | Every score equals the per-term breakdown printed beside it; every hit shares a term with the query; padding a document can never raise its score; identical documents score identically |
+| `salvage` | Every truncation of a wrapped reply **fails closed**; `Scan`'s offsets always re-slice to the JSON it reported; its values never overlap; `DecodeOne` never partially fills a destination before refusing |
+| `season` | `trend + season + residual` **adds up** to the series it split, to the last bit; no component or forecast is ever NaN; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
+| `stats` | Pearson stays in [−1, 1] and is symmetric; it is invariant under rescaling either input; Spearman depends only on order, which is what pins the radix ranking; ranks always sum to n(n+1)/2 |
+| `avro` | Every field type round-trips; `Long` at **all 64 varint boundaries**; doubles and floats **bit for bit**, including NaN and −0; a present empty string stays present; a truncated stream always errors |
+| `tablelog` | The table matches an independent model of its commits; a snapshot taken at an old version **never changes**; compaction preserves every visible row; prefix scans are exact; versions advance one commit at a time |
+| `arimax` | Differencing shortens by exactly `d` and flattens a degree-`d` polynomial; ACF and PACF stay in [−1, 1]; a forecast interval contains its own point estimate and widens with confidence; an exact slope is recovered |
+| `memo` | Capacity is never exceeded; N concurrent callers run the function **once**; errors coalesce but are not cached |
+| `lazy` | Concurrent getters evaluate once; a `Map` chain stays unevaluated until forced; `Map` composes |
+| `budget` | No phase is ever allowed more time than remains; the deadline never moves; a phase context never outlives the budget |
 
-A fit every 0.67 ms rather than every 36 ms is what changes architecture. It is
-the difference between a nightly batch job that writes forecasts to a table and
-**fitting a fresh model inside the request that needs it** — per tenant, per
-series, on demand. That is the capability Go is buying here, not a leaderboard
-position.
-
-### `runi/memo` vs `functools.lru_cache`
-
-`lru_cache` is the API that inspired `memo`: one decorator, one bound, nothing
-to configure. Same experiment on both sides — N callers hit one cold key
-simultaneously, with a 5 ms function, counting **how many times the function
-actually ran**.
-
-| | `runi/memo` | `functools.lru_cache` |
-|---|---:|---:|
-| Cache hit | **25.3 ns** | 77.2 ns |
-| Cache miss | 553 ns | **181 ns** |
-| 8 cold callers → **times the function ran** | **1** | **8** |
-| 64 cold callers → **times the function ran** | **1** | **64** |
-| Wall clock, 64 cold callers | **5.3 ms** | 14.9 ms |
-| TTL | ✅ | ❌ |
-| Single-flight | ✅ | ❌ |
-
-The hit path is ~3× faster, and `lru_cache` is **3× faster on a miss** — its
-miss is a dict insert, ours also maintains an LRU list and expiry. That is a
-real loss and it is in the table.
-
-But the row that matters is the function-ran count. With 64 callers on a cold
-key, `lru_cache` calls the expensive function **64 times**; `memo` calls it
-**once**. If that function is a model inference or a paid API call, the
-difference is not 3× on a nanosecond — it is 64× on the expensive thing. This is
-not a flaw in `lru_cache`, which never promised single-flight; it is the reason
-`memo` builds it in rather than leaving it to the caller.
+The two single-flight properties wait on the `Coalesced` counter rather than
+sleeping, so they are statements about the store and not about the scheduler —
+one of them failed while the benchmark machine was busy, for a reason that was
+not a defect, which is its own small lesson about tests that measure the host.
 
 ### What was not measured
 
 - **Prophet was not run.** It is a different model class — additive trend plus
   seasonality, not ARIMAX — so running it on this data would have measured the
   mismatch, not the library. No claim about Prophet appears here.
-- **`pmdarima`, R's `forecast`, and every other implementation** were not run.
-- **One machine, one session.** The `ns`/`ms` figures move with the host; the
-  ratios are more stable than the absolutes, and the accuracy figures are
+- **`pmdarima`, R's `forecast`, PyTorch and TensorFlow were not run.** None of
+  them is the tool someone reaches for to fit an ARIMAX or rank documents by
+  BM25, and benchmarking a deep-learning framework on a 500-point regression
+  would measure the mismatch rather than either library.
+- **One machine, one session, one core busy.** The absolute times move with the
+  host; the ratios are far more stable, and the accuracy figures are
   deterministic given the CSVs.
 - **Synthetic data.** Correct for measuring estimator bias against a known
   truth, and *not* evidence about either library's accuracy on real series.
 
 ### On the coverage figure
 
-**Every package is at 100% of statements.** Getting the last few percent was worth more than the number: it found a truncated model reply that decoded as a clean result, a minimum-length rule stated twice so the real one could never fire, and a change-feed comparator that was not a total order. Four branches turned out to be unreachable rather than untested and were removed, with the invariant that makes them impossible written where they stood. Rather than
-write tests that execute a line without asserting anything, here is every
-statement that is not covered and why:
+**Every one of the eleven packages is at 100% of statements**, and the floor is
+enforced per package so a strong one cannot pay for a weak one.
 
-| Where | What it is | Why no test |
-|---|---|---|
-| `memo/memo.go:219` | `if back == nil { break }` inside the eviction loop | The loop only runs while `len(entries) > Capacity`, so the LRU list cannot be empty. Unreachable by construction; kept so a future refactor cannot spin forever |
-| `arimax/acf.go:68` | Durbin–Levinson bails when the denominator falls below 1e-300 | Requires an autocorrelation structure that is numerically degenerate but not constant. Reachable in principle, not constructible without writing the pathological input by hand |
-| `arimax/linalg.go:54` | Householder reflector skipped when `vnorm < 1e-300` | Same: a column that is collinear to within denormal precision |
-| `arimax/arimax.go:87` | `Fit` returning a `fitARMA` error | `Fit`'s own length guard is stricter than `fitARMA`'s, so by the time it is called the error cannot occur. Kept because the two guards are in different files and could drift |
+The number is not the point, and on its own it is close to meaningless — the six
+defects above were all found in code it already covered. What chasing the last
+few percent was good for was the questions it forced: it turned up a truncated
+model reply that decoded as a clean result, a minimum-length rule stated twice so
+the real one could never fire, and a change-feed comparator that was not a total
+order.
 
-All four are defensive guards against a future change, which is exactly the code
-that should exist and should not be chased with a synthetic test. A test that
-forces an unreachable branch tests the test, not the code.
+Where a guard genuinely cannot be reached through the public API, it is split
+into its own function and tested with the input it exists for, rather than left
+uncovered or chased with a synthetic test that executes a line without asserting
+anything. `levinson` in `arimax` and `meanScaled` in `stats` are both shaped that
+way, and each says in its doc comment why the branch is unreachable from
+outside. A test that forces an unreachable branch tests the test, not the code.
 
 ## Assurance
 
@@ -922,12 +1030,14 @@ continuously verified in CI, not asserted once.
 **Runtime behaviour**, since questionnaires ask: no network access, no filesystem
 access, no subprocesses, no `unsafe`, no cgo, no reflection over untrusted input.
 Deterministic — same input, same output, with the only clock read being one the
-caller injects for testing expiry.
+caller injects for testing expiry. The one exception is `certissue`, whose keys,
+serial numbers and signatures are random by design and come from `crypto/rand`.
 
 **What this is not**, stated so nobody infers it: `memo.Hash` uses SHA-256 to
 derive cache keys and is **not** a security boundary; the packages perform no
-authentication, authorisation or input validation; `memo` is in-process only,
-with no listener and nothing shared between replicas.
+authentication, and apart from `certissue` (which checks certificate requests
+and enforces the policy you give it) no authorisation or input validation;
+`memo` is in-process only, with no listener and nothing shared between replicas.
 
 ## Used by
 
@@ -958,9 +1068,9 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all three packages
-go test -race ./...                           # lazy and memo are concurrent
-go test -bench . -benchmem -benchtime=200x ./...
+go test ./...                                 # all eleven packages
+go test -race ./...                           # several packages are concurrent
+go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
 ```
 
