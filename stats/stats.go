@@ -104,6 +104,13 @@ func Mean(x []float64) float64 {
 // so the running sum cannot overflow. fast is what the single-accumulator pass
 // produced; it is returned unchanged when x holds a NaN or an infinity, since
 // those make the mean genuinely undefined rather than merely unrepresentable.
+//
+// Its two guards cannot be reached through Mean, which is why it is a separate
+// function rather than an inline branch: Mean only calls it after the fast
+// path produced a non-finite result, and neither a series holding a NaN or an
+// infinity nor an all-zero series can be rescued by rescaling -- the first is
+// undefined and the second never overflows in the first place. Splitting them
+// out is what lets them be tested with the input they exist for.
 func meanScaled(x []float64, fast float64) float64 {
 	var scale float64
 	for _, v := range x {

@@ -375,3 +375,42 @@ func TestConcurrentUse(t *testing.T) {
 		t.Fatalf("unfinished = %+v", got)
 	}
 }
+
+// Scaled must never hand back a plan New would refuse: the clamps it needs for
+// that are only reachable from inputs a valid plan cannot produce, so they are
+// exercised directly. See the note on Scaled.
+func TestScaledClampsMarginAndMinSlice(t *testing.T) {
+	// Floors that already exceed the total: the margin has nothing left and is
+	// clamped to zero rather than left negative, so Validate reports the
+	// floors, which are the real problem.
+	over := Plan{
+		Total:  time.Second,
+		Margin: 100 * time.Millisecond,
+		Phases: []Phase{
+			{Name: "a", Floor: 800 * time.Millisecond},
+			{Name: "b", Floor: 800 * time.Millisecond},
+		},
+	}
+	got := over.Scaled(time.Second)
+	if got.Margin != 0 {
+		t.Errorf("margin = %v, want 0 when the floors alone exceed the total", got.Margin)
+	}
+
+	// A minimum slice larger than the whole new deadline would skip every
+	// phase; it is capped at the total.
+	small := Plan{
+		Total:    time.Second,
+		MinSlice: 500 * time.Millisecond,
+		Phases:   []Phase{{Name: "a", Cap: 400 * time.Millisecond}},
+	}
+	if err := small.Validate(); err != nil {
+		t.Fatalf("the starting plan is invalid: %v", err)
+	}
+	scaled := small.Scaled(100 * time.Millisecond)
+	if scaled.MinSlice > scaled.Total {
+		t.Errorf("MinSlice %v exceeds the %v total", scaled.MinSlice, scaled.Total)
+	}
+	if err := scaled.Validate(); err != nil {
+		t.Errorf("scaling a valid plan made it invalid: %v", err)
+	}
+}

@@ -310,3 +310,39 @@ func TestSortableBitsOrdersLikeFloats(t *testing.T) {
 		t.Log("negative zero shares a key with positive zero")
 	}
 }
+
+// meanScaled's guards are unreachable through Mean -- see the note on the
+// function -- so they are exercised with the inputs they exist for.
+func TestMeanScaledGuards(t *testing.T) {
+	const fast = 1234.5
+	for _, tc := range []struct {
+		name string
+		in   []float64
+	}{
+		{"a NaN cannot be rescued by rescaling", []float64{1, math.NaN(), 2}},
+		{"nor can an infinity", []float64{1, math.Inf(1), 2}},
+		{"an all-zero series has no scale to divide by", []float64{0, 0, 0}},
+	} {
+		if got := meanScaled(tc.in, fast); got != fast {
+			t.Errorf("%s: meanScaled returned %v, want the fast path's %v", tc.name, got, fast)
+		}
+	}
+}
+
+// Mean must survive a sum that overflows float64 when the mean itself is
+// perfectly representable. Found by TestPropertyMeanLiesWithinTheData.
+func TestMeanDoesNotOverflow(t *testing.T) {
+	x := make([]float64, 32)
+	for i := range x {
+		x[i] = math.MaxFloat64 / 2
+	}
+	got := Mean(x)
+	if want := math.MaxFloat64 / 2; math.Abs(got-want) > want*1e-12 {
+		t.Errorf("Mean of %d copies of MaxFloat64/2 = %v, want %v", len(x), got, want)
+	}
+	// Mixed signs, where the compensated sum overflows in one direction first.
+	y := []float64{math.MaxFloat64, math.MaxFloat64, -math.MaxFloat64, -math.MaxFloat64}
+	if got := Mean(y); got != 0 {
+		t.Errorf("Mean of two pairs that cancel = %v, want 0", got)
+	}
+}

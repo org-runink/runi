@@ -70,6 +70,12 @@ func (p Plan) Validate() error {
 // Scaled returns the plan for a different total deadline, with every cap and
 // floor scaled in proportion. Margin and MinSlice are not scaled: they are
 // costs of the answer and of starting a phase, not shares of the deadline.
+//
+// Margin is kept only while keeping it is possible. A fixed margin plus the
+// scaled floors eventually needs more than a shrinking total, and Scaled would
+// then hand back a plan New refuses -- a failure reported a long way from the
+// Scaled call that caused it. In that case the margin is cut to whatever the
+// floors leave, so scaling a valid plan always yields a valid plan.
 func (p Plan) Scaled(total time.Duration) Plan {
 	q := p
 	q.Total = total
@@ -78,10 +84,25 @@ func (p Plan) Scaled(total time.Duration) Plan {
 	if p.Total > 0 {
 		f = float64(total) / float64(p.Total)
 	}
+	floors := time.Duration(0)
 	for i, ph := range p.Phases {
 		ph.Cap = time.Duration(float64(ph.Cap) * f)
 		ph.Floor = time.Duration(float64(ph.Floor) * f)
 		q.Phases[i] = ph
+		floors += ph.Floor
+	}
+	if q.Margin+floors > total {
+		q.Margin = total - floors
+		if q.Margin < 0 {
+			// Only reachable from a plan that was already invalid: the floors
+			// alone scale to at most the new total when the original honoured
+			// them. Clamped rather than left negative so Validate reports the
+			// floors, which is the real problem, instead of the margin.
+			q.Margin = 0
+		}
+	}
+	if q.MinSlice > total {
+		q.MinSlice = total
 	}
 	return q
 }
