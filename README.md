@@ -60,6 +60,7 @@ go get github.com/org-runink/runi
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
+| [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -575,52 +576,47 @@ storage stay yours.
 
 ---
 
-## Does this change anything for you?
+## `runi/toon` — the table format models write
 
-A table saying we compute a correlation in 1.06 ms where scipy takes 2.99 ms is
-not a reason to adopt anything. Nobody's problem is a slow Pearson, the
-absolute saving is under two milliseconds, and "compiled language beats
-interpreted glue" is not news. If the ratios below are all you read, you should
-not use this.
+TOON writes a list of uniform objects as the field names **once** and then a
+row each, instead of repeating every key on every record. For the shape a model
+actually returns — twenty findings that all have the same four fields — that is
+most of the tokens.
 
-Here is the honest case, which is four specific consequences. Each one names the
-number that drives it and what you would otherwise do instead.
+```go
+text, err := toon.Encode(report)        // to send
+err = toon.Decode(reply, &findings)     // to read back
+err = toon.Strict(reply, &findings)     // and to insist the counts match
+```
 
-**1. A forecast can live inside the request.** `statsmodels` needs **705 ms to
-import** before it fits anything, and then **15.6 ms per fit**. `arimax` needs
-**0 ms** — it is compiled into your binary — and **0.531 ms**. That is not 30×
-on a benchmark; it is the difference between a nightly batch that writes
-forecasts to a table and fitting a fresh model per tenant, per series, inside
-the handler that needs it. If you have ever built the batch job and the table
-and the staleness window because fitting was too slow to do inline, this is
-what removes them.
+```
+findings[2]{id,severity,file}:
+  1,high,cmd/server/main.go
+  2,low,internal/cache.go
+```
 
-**2. One execution instead of sixty-four.** With 64 callers on a cold key,
-`functools.lru_cache` runs your function **64 times** and `memo` runs it
-**once**. If that function is a model inference or a metered API call, the
-difference is not nanoseconds — it is the bill, and the rate limit.
+`Decode` is deliberately forgiving, because the input is a model's output: it
+strips a ``` fence, ignores blank lines, and **takes the values over the
+declared count**, since a model that miscounts its own list has still told you
+the list. `Strict` is the one that refuses a count mismatch, and that is the
+difference between the two — reach for `Strict` when the decoded value drives a
+decision rather than being shown to someone.
 
-**3. Search with no model, no vector store, no GPU.** Ranking 5,000 documents
-takes 65 ms to index and 0.4 ms a query, in-process. The alternative is not
-`rank_bm25` being 1.4× slower; it is standing up an embedding service.
+Three asymmetries are documented rather than hidden, because each one is a test
+in the package:
 
-**4. Nothing to audit.** Zero dependencies, enforced by CI — not "few", none.
-No transitive tree, no numpy ABI to pin, no supply chain to review, one static
-binary with no runtime. For some teams that is the entire decision and the
-speed is irrelevant.
+- a **top-level list** gains the key `items`, since a TOON document is a mapping
+  and a bare list has no key to hang on;
+- an **empty object** as a field's value is written `key:` and reads back as
+  null, because the parser cannot tell that from a line a model left blank, and
+  guessing "empty object" would make it stricter on exactly the input it exists
+  to be lenient about;
+- `Parse` keeps an integer as an `int64` and so is exact; `Decode` into `any`
+  goes through `encoding/json`, which rounds past 2⁵³. Decode into a typed
+  destination, or use `Parse`.
 
-**And you should not use it when:** you need the regression coefficient itself
-rather than a forecast — statsmodels recovers β twice as precisely, and that is
-in the table below; you already know your seasonal period and want the
-classical decomposition — statsmodels is 9.5× faster at it; your data does not
-fit on one machine — that is what Spark is for; or you want an ecosystem, a
-notebook and a plotting library, which this will never have.
 
-What the numbers below are actually for is proving those four claims are not
-marketing, and showing every case where we lose. The correctness evidence —
-[six defects the property tests found](#proof-it-is-right-not-just-fast) in code
-that already had 100% coverage — matters more than any of them, because fast
-and wrong is worthless.
+---
 
 ## Benchmarks
 
