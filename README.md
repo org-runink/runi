@@ -35,6 +35,14 @@
 **A data toolkit for Go: explore it, forecast it, search it, and make it fast.**
 Standard library only — no dependencies, in any package.
 
+The point is not that it is faster than Python. It is that work you currently
+do *somewhere else* — a nightly batch, an embedding service, a cluster round
+trip, a sidecar — fits inside the handler that needs it. A forecast fits per
+tenant in half a millisecond with no import cost; 5,000 documents rank with no
+model and no GPU; 64 callers hitting one cold key run the expensive function
+once. [Whether any of that is worth it to you](#does-this-change-anything-for-you),
+including the cases where it is not, is argued with measurements further down.
+
 ```bash
 go get github.com/org-runink/runi
 ```
@@ -566,6 +574,53 @@ somewhere the writer cannot change. The records, their encoding and their
 storage stay yours.
 
 ---
+
+## Does this change anything for you?
+
+A table saying we compute a correlation in 1.06 ms where scipy takes 2.99 ms is
+not a reason to adopt anything. Nobody's problem is a slow Pearson, the
+absolute saving is under two milliseconds, and "compiled language beats
+interpreted glue" is not news. If the ratios below are all you read, you should
+not use this.
+
+Here is the honest case, which is four specific consequences. Each one names the
+number that drives it and what you would otherwise do instead.
+
+**1. A forecast can live inside the request.** `statsmodels` needs **705 ms to
+import** before it fits anything, and then **15.6 ms per fit**. `arimax` needs
+**0 ms** — it is compiled into your binary — and **0.531 ms**. That is not 30×
+on a benchmark; it is the difference between a nightly batch that writes
+forecasts to a table and fitting a fresh model per tenant, per series, inside
+the handler that needs it. If you have ever built the batch job and the table
+and the staleness window because fitting was too slow to do inline, this is
+what removes them.
+
+**2. One execution instead of sixty-four.** With 64 callers on a cold key,
+`functools.lru_cache` runs your function **64 times** and `memo` runs it
+**once**. If that function is a model inference or a metered API call, the
+difference is not nanoseconds — it is the bill, and the rate limit.
+
+**3. Search with no model, no vector store, no GPU.** Ranking 5,000 documents
+takes 65 ms to index and 0.4 ms a query, in-process. The alternative is not
+`rank_bm25` being 1.4× slower; it is standing up an embedding service.
+
+**4. Nothing to audit.** Zero dependencies, enforced by CI — not "few", none.
+No transitive tree, no numpy ABI to pin, no supply chain to review, one static
+binary with no runtime. For some teams that is the entire decision and the
+speed is irrelevant.
+
+**And you should not use it when:** you need the regression coefficient itself
+rather than a forecast — statsmodels recovers β twice as precisely, and that is
+in the table below; you already know your seasonal period and want the
+classical decomposition — statsmodels is 9.5× faster at it; your data does not
+fit on one machine — that is what Spark is for; or you want an ecosystem, a
+notebook and a plotting library, which this will never have.
+
+What the numbers below are actually for is proving those four claims are not
+marketing, and showing every case where we lose. The correctness evidence —
+[six defects the property tests found](#proof-it-is-right-not-just-fast) in code
+that already had 100% coverage — matters more than any of them, because fast
+and wrong is worthless.
 
 ## Benchmarks
 
