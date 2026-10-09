@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Eleven small Go packages, zero dependencies, every claim measured.</em>
+  Twelve small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
+  <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -618,6 +618,53 @@ in the package:
 
 ---
 
+## Does this change anything for you?
+
+A table saying we compute a correlation in 1.06 ms where scipy takes 2.99 ms is
+not a reason to adopt anything. Nobody's problem is a slow Pearson, the
+absolute saving is under two milliseconds, and "compiled language beats
+interpreted glue" is not news. If the ratios below are all you read, you should
+not use this.
+
+Here is the honest case, which is four specific consequences. Each one names the
+number that drives it and what you would otherwise do instead.
+
+**1. A forecast can live inside the request.** `statsmodels` needs **705 ms to
+import** before it fits anything, and then **15.6 ms per fit**. `arimax` needs
+**0 ms** — it is compiled into your binary — and **0.531 ms**. That is not 30×
+on a benchmark; it is the difference between a nightly batch that writes
+forecasts to a table and fitting a fresh model per tenant, per series, inside
+the handler that needs it. If you have ever built the batch job and the table
+and the staleness window because fitting was too slow to do inline, this is
+what removes them.
+
+**2. One execution instead of sixty-four.** With 64 callers on a cold key,
+`functools.lru_cache` runs your function **64 times** and `memo` runs it
+**once**. If that function is a model inference or a metered API call, the
+difference is not nanoseconds — it is the bill, and the rate limit.
+
+**3. Search with no model, no vector store, no GPU.** Ranking 5,000 documents
+takes 65 ms to index and 0.4 ms a query, in-process. The alternative is not
+`rank_bm25` being 1.4× slower; it is standing up an embedding service.
+
+**4. Nothing to audit.** Zero dependencies, enforced by CI — not "few", none.
+No transitive tree, no numpy ABI to pin, no supply chain to review, one static
+binary with no runtime. For some teams that is the entire decision and the
+speed is irrelevant.
+
+**And you should not use it when:** you need the regression coefficient itself
+rather than a forecast — statsmodels recovers β twice as precisely, and that is
+in the table below; you already know your seasonal period and want the
+classical decomposition — statsmodels is 9.5× faster at it; your data does not
+fit on one machine — that is what Spark is for; or you want an ecosystem, a
+notebook and a plotting library, which this will never have.
+
+What the numbers below are actually for is proving those four claims are not
+marketing, and showing every case where we lose. The correctness evidence —
+[six defects the property tests found](#proof-it-is-right-not-just-fast) in code
+that already had 100% coverage — matters more than any of them, because fast
+and wrong is worthless.
+
 ## Benchmarks
 
 ### Against the libraries people actually reach for
@@ -913,7 +960,7 @@ Fast and wrong is worthless, so this is the half of the evidence that matters.
 
 Every package was at 100% statement coverage before any of the work below. That
 says every line **ran**. It does not say every line is **right**. So each of the
-eleven packages got property-based edge testing — the standard library's
+twelve packages got property-based edge testing — the standard library's
 `testing/quick` plus generated inputs, because a property library would be the
 twelfth dependency in a toolkit that advertises zero — stating the invariants an
 example test can only sample.
@@ -989,7 +1036,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the eleven packages is at 100% of statements**, and the floor is
+**Every one of the twelve packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1019,7 +1066,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the twelve packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1065,7 +1112,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all eleven packages
+go test ./...                                 # all twelve packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
