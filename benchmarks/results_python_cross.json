@@ -1,0 +1,20 @@
+{
+  "library": "python baselines",
+  "python": "3.12.3",
+  "machine": "aarch64",
+  "bm25_index_s": 0.08563984697684646,
+  "bm25_query_s": 0.7375153889879584,
+  "bm25_lib": "rank_bm25",
+  "tfidf_index_s": 0.16567216199473478,
+  "pearson_s": 0.002998487005243078,
+  "spearman_s": 0.0331070730171632,
+  "pearson_n": 200000,
+  "trend_s": 0.008978469006251544,
+  "trend_n": 100000,
+  "season_decompose_s": 0.00018000102136284113,
+  "season_n": 4000,
+  "avro_write_s": 0.015041940991068259,
+  "avro_bytes": 741181,
+  "avro_read_s": 0.01743461500154808,
+  "avro_rows": 20000
+}

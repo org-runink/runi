@@ -569,7 +569,50 @@ storage stay yours.
 
 ## Benchmarks
 
-Every figure is produced by `go test` in this repository and reproduces with:
+### Against the Python packages people reach for first
+
+Measured on one machine (ASUS Ascent GX10, 20 cores, aarch64), same data, same
+session. The full method, every case, and **the three where `runi` loses** are
+in [benchmarks/README.md](benchmarks/README.md).
+
+| Operation | `runi` | Python | |
+|---|---|---|---|
+| ARIMAX fit, n=10,000 | **7.41 ms** | 257.13 ms — statsmodels | **35× faster** |
+| OLS trend + t-test, n=100,000 | **0.15 ms** | 8.98 ms — scipy | **58× faster** |
+| Avro OCF write, 20,000 rows | **1.61 ms** | 15.04 ms — fastavro | **9.4× faster** |
+| BM25 query ×200 | **84.9 ms** | 737.5 ms — rank-bm25 | **8.7× faster** |
+| Pearson, n=200,000 | **0.68 ms** | 3.00 ms — scipy | **4.4× faster** |
+| Seasonal decomposition | 1.69 ms | **0.18 ms** — statsmodels | **9.4× slower** |
+| Spearman, n=200,000 | 243.9 ms | **33.1 ms** — scipy | **7.4× slower** |
+| BM25 index build | 177.9 ms | **85.6 ms** — rank-bm25 | **2.1× slower** |
+
+Speed is the easy half. On 200 trials against statsmodels, `arimax` matches its
+**prediction-interval coverage exactly (94.5%)** and its forecasts to within
+**0.07% RMSE** — but its **regression coefficients are twice as noisy**,
+because it fits by conditional sum of squares rather than exact maximum
+likelihood. If you need the coefficients rather than the forecast, use
+statsmodels. That gap is the open work here.
+
+### Next to a warehouse engine
+
+`runi` does not replace Spark, Databricks or Snowflake. It removes the round
+trip for work too small to deserve one. The same correlation over 200,000 rows:
+
+| | Time |
+|---|---|
+| `runi/stats` | **0.68 ms** |
+| scipy | 3.00 ms |
+| SparkML, warm session | 470 ms |
+| SparkML, including session start | 3.42 s |
+
+**692× on compute**, and about 5,000× once you count the session a caller
+actually pays for. Spark earns that back when the data does not fit on one
+machine; at this size it does, and it spent 7.2 seconds building a DataFrame
+for a calculation that takes under a millisecond.
+
+### Go benchmarks
+
+Every figure below is produced by `go test` in this repository and reproduces with:
 
 ```bash
 go test -bench . -benchmem -benchtime=200x ./...

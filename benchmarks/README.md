@@ -1,89 +1,106 @@
-# Benchmarks against the Python reference implementations
+# Benchmarks
 
-Everything here is reproducible. If a number in the root README disagrees with
-what you get, the number is wrong and we want to hear about it.
+Every number here was measured on one machine, on the same data, in the same
+session, and every number we lose is in the table with the ones we win.
 
-## Why this is set up the way it is
+A benchmark that only shows the wins tells you nothing about whether to use the
+library, because you cannot tell what it left out. These say where `runi` is
+the right tool and where it is not.
 
-The failure mode of a cross-language benchmark is that each side quietly
-measures something different — its own data, its own model, its own definition
-of "a fit". So:
+## The machine
 
-1. **One generator.** `gen.py` writes the datasets to CSV once. Both
-   implementations read the same files. Neither generates its own.
-2. **One model.** ARIMAX(1,0,1) with a single exogenous regressor, on both sides.
-3. **One control.** Each harness reports `naive_rmse`, the error of carrying the
-   last training value forward. It depends only on the data, so if the two sides
-   disagree on it, they were not fitted to the same numbers and nothing else in
-   the output means anything. They currently agree to all 17 digits:
-   `3.7104740961972245`.
-4. **Known truth.** The data is synthetic *because* estimator bias cannot be
-   measured without knowing what should have been recovered. This is the right
-   choice for bias and the wrong choice for judging real-world accuracy, and the
-   README says so.
+ASUS Ascent GX10 (NVIDIA GB10), 20 cores, 119 GB, `aarch64`, Linux 6.17.
+Go 1.27.2. Python 3.12.3 with numpy 2.5.3, scipy 1.18.1, pandas 3.0.6,
+scikit-learn 1.9.1, statsmodels 0.15.0, rank-bm25, fastavro 1.13.1,
+PySpark 3.5.3.
+
+Everything ran on CPU. Medians of repeated runs, warm-up discarded. The data is
+generated, never captured: we publish code, not anyone's records.
+
+Absolute figures are for this machine and this architecture. The ratios are the
+portable part, and even those will move with your data.
+
+## Where `runi` wins
+
+| Operation | `runi` | Python | Faster by |
+|---|---|---|---|
+| ARIMAX fit, n=500 | **0.41 ms** | 15.18 ms — statsmodels | **37×** |
+| ARIMAX fit, n=2,000 | **1.56 ms** | 51.48 ms — statsmodels | **33×** |
+| ARIMAX fit, n=10,000 | **7.41 ms** | 257.13 ms — statsmodels | **35×** |
+| OLS trend + t-test, n=100,000 | **0.15 ms** | 8.98 ms — `scipy.stats.linregress` | **58×** |
+| Avro OCF write, 20,000 rows | **1.61 ms** | 15.04 ms — fastavro | **9.4×** |
+| BM25 query ×200, 5,000 docs | **84.9 ms** | 737.5 ms — rank-bm25 | **8.7×** |
+| Pearson correlation, n=200,000 | **0.68 ms** | 3.00 ms — `scipy.stats.pearsonr` | **4.4×** |
+| Avro OCF read, 20,000 rows | **14.5 ms** | 17.4 ms — fastavro | **1.2×** |
+
+## Where `runi` loses
+
+| Operation | `runi` | Python | Slower by | Why |
+|---|---|---|---|---|
+| Seasonal decomposition, n=4,000 | 1.69 ms | **0.18 ms** — statsmodels | **9.4×** | `seasonal_decompose` is a moving average in C loops. `season.Decompose` fits a Fourier series by least squares, which costs more and gives you something a moving average cannot: a model that extrapolates. |
+| Spearman correlation, n=200,000 | 243.9 ms | **33.1 ms** — scipy | **7.4×** | scipy ranks with an optimised C argsort. Ours is a plain sort. This is a real gap and the fix is ours to make, not a property of the language. |
+| BM25 index build, 5,000 docs | 177.9 ms | **85.6 ms** — rank-bm25 | **2.1×** | We build more per document so queries are cheaper. Index once and query many times and we are ahead overall; index repeatedly and query rarely and we are not. |
+
+`season.Decompose` with changepoint detection left on is 28.0 ms, because
+finding structural breaks is most of the work. The 1.69 ms above is
+decomposition only, which is the operation statsmodels performs.
+
+## Accuracy, which matters more than speed
+
+Being faster at the wrong answer is not an achievement. Over 200 trials on
+identical synthetic series, against statsmodels:
+
+| | `runi/arimax` | statsmodels |
+|---|---|---|
+| Prediction-interval coverage | **94.5%** | **94.5%** |
+| Forecast RMSE | 1.3169 | 1.3160 |
+| AR coefficient RMSE | 0.0508 | 0.0506 |
+| **Regression coefficient RMSE** | **0.0666** | **0.0336** |
+
+Coverage is identical and forecasts differ by 0.07%. The β estimates are
+**twice as noisy**, and that is not a rounding difference: we fit by
+conditional sum of squares where statsmodels runs exact maximum likelihood
+through a Kalman filter. If you need the coefficients themselves — not the
+forecast — statsmodels is the better tool today. Closing that gap is the open
+work on `arimax`, and it is a bigger prize than any speed-up on this page.
+
+## Alongside a warehouse engine
+
+`runi` does not replace Spark, Databricks or Snowflake, and nothing here
+suggests it does. It removes the round trip for work that is too small to
+deserve one.
+
+The same Pearson correlation over 200,000 rows:
+
+| | Time |
+|---|---|
+| `runi/stats` | **0.68 ms** |
+| scipy | 3.00 ms |
+| SparkML `Correlation.corr`, warm session | 470 ms |
+| SparkML, counting session start and import | 3.42 s |
+| SparkML, counting the DataFrame build as well | 10.6 s |
+
+**692× on compute alone**, and the gap widens to roughly 5,000× once the
+session start a caller actually pays for is included. Spark earns that overhead
+back when the data does not fit on one machine. At 200,000 rows it does not,
+and the engine spends 7.2 seconds building a DataFrame for a calculation that
+takes well under a millisecond.
+
+That is the case for a Go library next to a warehouse: the SDK call, the
+notebook cell and the service handler all pay cluster latency for small work.
+`runi` is what you reach for when the answer is cheaper than the round trip.
 
 ## Running them
 
-```bash
-python -m venv .venv && . .venv/bin/activate
-pip install numpy pandas statsmodels
+```sh
+python benchmarks/gen.py            # synthesise the ARIMAX datasets
+go run ./benchmarks/runibench       # runi/arimax
+python benchmarks/bench_statsmodels.py
 
-python benchmarks/gen.py                 # writes benchmarks/data/*.csv
-python benchmarks/bench_statsmodels.py   # -> results_statsmodels.json
-go run ./benchmarks/runibench            # -> results_runi.json
-
-python benchmarks/bench_lru.py           # -> results_lru.json
-go run ./benchmarks/memobench            # -> results_memo.json
+go run ./benchmarks/crossbench      # bm25, stats, season, avro
+python benchmarks/baselines.py      # rank-bm25, scipy, statsmodels, fastavro
+python benchmarks/spark_bench.py    # SparkML, needs a JVM
 ```
 
-`benchmarks/data/` is gitignored: it is ~2.8MB, it is generated, and anything
-inside a Go module tree ships in every published module zip.
-
-## What each file does
-
-| File | What it measures |
-|---|---|
-| `gen.py` | Writes the shared datasets and `meta.json` with the true parameters |
-| `bench_statsmodels.py` | statsmodels SARIMAX: fit time at n=500/2k/10k, parameter recovery, interval coverage, forecast RMSE |
-| `runibench/main.go` | The same, for `runi/arimax` |
-| `bench_lru.py` | `functools.lru_cache`: hit, miss, and how many times the function runs under a stampede |
-| `memobench/main.go` | The same experiment for `runi/memo` |
-
-## The honest reading of the results
-
-`runi/arimax` fits **42–54× faster** and produces forecasts that are
-statistically indistinguishable from statsmodels': 0.07% apart in six-step RMSE,
-with identical 94.5% empirical coverage of the nominal 95% intervals.
-
-**statsmodels recovers the exogenous coefficient about twice as precisely**
-(β RMSE 0.0336 vs 0.0666). That is the estimator, not a defect: statsmodels runs
-exact maximum likelihood through a Kalman filter, `arimax` uses conditional sum
-of squares on a staged regression. The speed and the precision loss are the same
-trade, made once, and documented rather than buried.
-
-If the coefficient is your finding, use statsmodels. If the forecast is your
-finding and you need it inside a request rather than a nightly batch, that is
-what this is for.
-
-For `memo` the interesting number is not the nanoseconds. Under 64 concurrent
-callers on a cold key, `lru_cache` runs the expensive function **64 times** and
-`memo` runs it **once**. `lru_cache` never promised single-flight; that is
-precisely why `memo` has it.
-
-## Environment these were taken on
-
-Recorded so that a different result is informative rather than confusing.
-
-| | |
-|---|---|
-| CPU | AMD Ryzen 7 8840U, 16 threads |
-| Memory | 25 GiB |
-| OS | Linux 6.18 |
-| Go | 1.25 |
-| Python | 3.14.7 |
-| statsmodels | 0.15.0 |
-| numpy | 2.5.3 |
-
-An unpinned laptop with other work on it. Treat the ratios as the finding and
-the absolute times as approximate; the accuracy figures are deterministic given
-the CSVs and do not move.
+Results land in `benchmarks/results_*.json`, which is what the tables are built
+from.
