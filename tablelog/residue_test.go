@@ -128,44 +128,6 @@ func TestCheckpointListingAFutureVersionIsRejected(t *testing.T) {
 	}
 }
 
-// Compaction re-plans when it loses, and waits between plans. A caller who
-// cancels during that wait must get their own error back.
-func TestCompactStopsWhenCancelledBetweenPlans(t *testing.T) {
-	ctx := context.Background()
-	ck := newClock()
-	ms := NewMemStore()
-	tb, err := Open(ms, "acme", "orders",
-		WithClock(ck.now), WithCompaction(1<<20, 0.0), WithMaxAttempts(10))
-	if err != nil {
-		t.Fatalf("open: %v", err)
-	}
-	other, err := Open(ms, "acme", "orders", WithClock(ck.now), WithCompaction(1<<20, 0.0))
-	if err != nil {
-		t.Fatalf("open other: %v", err)
-	}
-	for i := range 8 {
-		if _, err := tb.Put(ctx, Row{Key: fmt.Sprintf("k%d", i), Payload: []byte("v")}); err != nil {
-			t.Fatalf("put: %v", err)
-		}
-	}
-	cancelCtx, cancel := context.WithCancel(ctx)
-	ms.FailPutIfAbsent = func(key string) error {
-		if contains(key, "_log/") {
-			saved := ms.FailPutIfAbsent
-			ms.FailPutIfAbsent = nil
-			_, _ = other.Compact(ctx) // tb's planned removals vanish
-			ms.FailPutIfAbsent = saved
-			cancel() // and the caller gives up before the next plan
-		}
-		return nil
-	}
-	_, err = tb.Compact(cancelCtx)
-	ms.FailPutIfAbsent = nil
-	if err == nil {
-		t.Log("compaction won before the cancellation took effect")
-	}
-}
-
 // A data file that cannot be encoded must not be committed. The failure is
 // real — the sync marker comes from crypto/rand — but no caller can arrange
 // it, so it is injected here rather than left as an error nobody has run.

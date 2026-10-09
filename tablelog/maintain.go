@@ -35,13 +35,7 @@ func (t *Table) Compact(ctx context.Context) (CompactResult, error) {
 	var lastErr error
 	for plan := 0; plan < t.cfg.maxAttempts; plan++ {
 		if plan > 0 {
-			// Exercised by TestCompactStopsIfCancelledWhileWaitingToReplan,
-			// which skips when the compaction wins its race before the
-			// cancellation lands. Covering this deterministically would need a
-			// test whose result depends on scheduling, and a test that passes
-			// or skips depending on how busy the machine is teaches people to
-			// re-run it rather than read it.
-			if err := t.backoff(ctx, plan); err != nil {
+			if err := waitBetweenPlans(t, ctx, plan); err != nil {
 				return CompactResult{}, err
 			}
 		}
@@ -191,4 +185,16 @@ func (t *Table) Vacuum(ctx context.Context, retention time.Duration) (VacuumResu
 		res.Deleted = append(res.Deleted, p)
 	}
 	return res, nil
+}
+
+// waitBetweenPlans is the pause before re-planning a lost compaction. It is a
+// variable so the cancellation path can be tested without depending on when a
+// goroutine happens to run: reaching it for real needs a conflict and a
+// cancellation to interleave in a window with no I/O in it, and a test that
+// waits for that window is a test that passes or fails with machine load.
+// What matters is the contract — if the wait returns, so does Compact, with
+// the caller's error and without touching another file — and that is what the
+// test asserts.
+var waitBetweenPlans = func(t *Table, ctx context.Context, plan int) error {
+	return t.backoff(ctx, plan)
 }

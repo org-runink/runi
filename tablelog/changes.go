@@ -63,19 +63,28 @@ func (s *Snapshot) ChangesSince(ctx context.Context, prefix string, after int64)
 			out = append(out, Change{Record: r.record(), Ord: r.ord, Deleted: r.del})
 		}
 	}
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].Version != out[j].Version {
-			return out[i].Version < out[j].Version
-		}
-		if out[i].Ord != out[j].Ord {
-			return out[i].Ord < out[j].Ord
-		}
-		// Not reachable today, and kept anyway so the comparator is total:
-		// Ord is the row's position within its commit, so two changes at the
-		// same version always have different Ords. A sort whose comparator is
-		// only a partial order is unstable in a way that shows up as changes
-		// arriving in a different order on different runs.
-		return out[i].Key < out[j].Key
-	})
+	sort.Slice(out, func(i, j int) bool { return changeLess(out[i], out[j]) })
 	return out, nil
+}
+
+// changeLess orders a feed: by the commit that wrote the change, then by the
+// row's position within that commit, then by key.
+//
+// The key comparison does not decide anything on data this package produces —
+// Ord is unique within a commit, so two changes at the same version never tie —
+// and it is here so the ordering is a TOTAL order rather than a partial one.
+// sort.Slice is not stable, and a comparator that reports neither a<b nor b<a
+// for distinct elements lets them come back in different orders on different
+// runs, which in a change feed means a consumer replaying the same version
+// twice can apply it two different ways. It is a named function so that
+// property can be tested directly, instead of being asserted about in a
+// comment that nothing checks.
+func changeLess(a, b Change) bool {
+	if a.Version != b.Version {
+		return a.Version < b.Version
+	}
+	if a.Ord != b.Ord {
+		return a.Ord < b.Ord
+	}
+	return a.Key < b.Key
 }
