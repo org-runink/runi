@@ -5,10 +5,10 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"math"
 	"sort"
 	"strings"
+	"sync"
 )
 
 // Hash builds a deterministic cache key from structured parts.
@@ -30,139 +30,161 @@ import (
 //
 //	key := memo.Hash("model-v3", 0.2, map[string]any{"q": q, "lang": "en"})
 func Hash(parts ...any) string {
-	h := sha256.New()
+	k := keyPool.Get().(*keyBuf)
+	k.b = k.b[:0]
 	for _, p := range parts {
-		writeValue(h, p)
+		k.value(p)
 	}
-	return hex.EncodeToString(h.Sum(nil))
-}
-
-func writeValue(h io.Writer, v any) {
-	switch t := v.(type) {
-	case nil:
-		tag(h, 'z')
-	case string:
-		tag(h, 's')
-		writeBytes(h, []byte(t))
-	case []byte:
-		tag(h, 'b')
-		writeBytes(h, t)
-	case bool:
-		tag(h, 'o')
-		if t {
-			writeBytes(h, []byte{1})
-		} else {
-			writeBytes(h, []byte{0})
-		}
-	case int:
-		writeInt(h, int64(t))
-	case int8:
-		writeInt(h, int64(t))
-	case int16:
-		writeInt(h, int64(t))
-	case int32:
-		writeInt(h, int64(t))
-	case int64:
-		writeInt(h, t)
-	case uint:
-		writeUint(h, uint64(t))
-	case uint8:
-		writeUint(h, uint64(t))
-	case uint16:
-		writeUint(h, uint64(t))
-	case uint32:
-		writeUint(h, uint64(t))
-	case uint64:
-		writeUint(h, t)
-	case float32:
-		writeFloat(h, float64(t))
-	case float64:
-		writeFloat(h, t)
-	case []string:
-		tag(h, 'l')
-		writeUint(h, uint64(len(t)))
-		for _, s := range t {
-			writeValue(h, s)
-		}
-	case []any:
-		tag(h, 'l')
-		writeUint(h, uint64(len(t)))
-		for _, e := range t {
-			writeValue(h, e)
-		}
-	case map[string]any:
-		tag(h, 'm')
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		writeUint(h, uint64(len(keys)))
-		for _, k := range keys {
-			writeValue(h, k)
-			writeValue(h, t[k])
-		}
-	case map[string]string:
-		tag(h, 'm')
-		keys := make([]string, 0, len(t))
-		for k := range t {
-			keys = append(keys, k)
-		}
-		sort.Strings(keys)
-		writeUint(h, uint64(len(keys)))
-		for _, k := range keys {
-			writeValue(h, k)
-			writeValue(h, t[k])
-		}
-	default:
-		// Anything else is rendered with %v and tagged distinctly, so an
-		// unsupported type still produces a stable key rather than a panic —
-		// but it is tagged 'u' so it can never collide with a handled type.
-		tag(h, 'u')
-		writeBytes(h, []byte(fmt.Sprintf("%T|%v", t, t)))
+	sum := sha256.Sum256(k.b)
+	// A key built from one oversized argument should not keep that capacity
+	// parked in the pool for the life of the process.
+	if cap(k.b) <= maxPooledKey && cap(k.keys) <= maxPooledKeys {
+		k.keys = k.keys[:0]
+		keyPool.Put(k)
 	}
+	return hex.EncodeToString(sum[:])
 }
 
-func tag(h io.Writer, c byte) { _, _ = h.Write([]byte{c}) }
-
-func writeBytes(h io.Writer, b []byte) {
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], uint64(len(b)))
-	_, _ = h.Write(n[:])
-	_, _ = h.Write(b)
+// keyBuf is the canonical byte form of a key, built once and hashed once.
+//
+// The obvious implementation writes each piece straight into the sha256 state
+// through an io.Writer, and that is what this used to do. It cost 36
+// allocations to hash a four-field map, because every one of those writes
+// escapes: a tag is `h.Write([]byte{c})`, a length prefix is `h.Write(n[:])`
+// on a local array, and every string is `[]byte(s)` copied for the call. None
+// of them survives the call, but the compiler cannot know that through an
+// interface. Appending into one buffer and hashing it at the end produces the
+// SAME bytes and the same digest, with the allocations gone.
+type keyBuf struct {
+	b []byte
+	// keys is scratch for sorting map keys, used as a STACK so a nested map
+	// cannot clobber the one that contains it: each call appends its keys,
+	// sorts only its own region, and truncates back on the way out.
+	keys []string
 }
 
-func writeInt(h io.Writer, v int64) {
-	tag(h, 'i')
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], uint64(v))
-	_, _ = h.Write(n[:])
-}
+const (
+	maxPooledKey  = 64 << 10
+	maxPooledKeys = 1024
+)
 
-func writeUint(h io.Writer, v uint64) {
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], v)
-	_, _ = h.Write(n[:])
-}
+var keyPool = sync.Pool{New: func() any {
+	return &keyBuf{b: make([]byte, 0, 256), keys: make([]string, 0, 16)}
+}}
 
-// writeFloat canonicalises NaN so that two NaNs hash alike, which they would
-// not if their bit patterns differed, and normalises negative zero to zero so
-// that -0.0 and 0.0 share a key.
-func writeFloat(h io.Writer, v float64) {
-	tag(h, 'f')
+func (k *keyBuf) tag(c byte)     { k.b = append(k.b, c) }
+func (k *keyBuf) u64(v uint64)   { k.b = binary.BigEndian.AppendUint64(k.b, v) }
+func (k *keyBuf) bytes(b []byte) { k.u64(uint64(len(b))); k.b = append(k.b, b...) }
+func (k *keyBuf) str(s string)   { k.u64(uint64(len(s))); k.b = append(k.b, s...) }
+
+func (k *keyBuf) int(v int64)   { k.tag('i'); k.u64(uint64(v)) }
+func (k *keyBuf) uint(v uint64) { k.u64(v) }
+
+// float canonicalises NaN so that two NaNs hash alike, which they would not if
+// their bit patterns differed, and normalises negative zero to zero so that
+// -0.0 and 0.0 share a key.
+func (k *keyBuf) float(v float64) {
+	k.tag('f')
 	if math.IsNaN(v) {
-		v = math.NaN()
-		var n [8]byte
-		binary.BigEndian.PutUint64(n[:], 0x7FF8000000000001)
-		_, _ = h.Write(n[:])
+		k.u64(0x7FF8000000000001)
 		return
 	}
 	if v == 0 {
 		v = 0
 	}
-	var n [8]byte
-	binary.BigEndian.PutUint64(n[:], math.Float64bits(v))
-	_, _ = h.Write(n[:])
+	k.u64(math.Float64bits(v))
+}
+
+func (k *keyBuf) value(v any) {
+	switch t := v.(type) {
+	case nil:
+		k.tag('z')
+	case string:
+		k.tag('s')
+		k.str(t)
+	case []byte:
+		k.tag('b')
+		k.bytes(t)
+	case bool:
+		k.tag('o')
+		if t {
+			k.bytes([]byte{1})
+		} else {
+			k.bytes([]byte{0})
+		}
+	case int:
+		k.int(int64(t))
+	case int8:
+		k.int(int64(t))
+	case int16:
+		k.int(int64(t))
+	case int32:
+		k.int(int64(t))
+	case int64:
+		k.int(t)
+	case uint:
+		k.uint(uint64(t))
+	case uint8:
+		k.uint(uint64(t))
+	case uint16:
+		k.uint(uint64(t))
+	case uint32:
+		k.uint(uint64(t))
+	case uint64:
+		k.uint(t)
+	case float32:
+		k.float(float64(t))
+	case float64:
+		k.float(t)
+	case []string:
+		k.tag('l')
+		k.uint(uint64(len(t)))
+		for _, s := range t {
+			k.value(s)
+		}
+	case []any:
+		k.tag('l')
+		k.uint(uint64(len(t)))
+		for _, e := range t {
+			k.value(e)
+		}
+	case map[string]any:
+		k.tag('m')
+		at := pushKeys(k, t)
+		k.uint(uint64(len(k.keys) - at))
+		for _, key := range k.keys[at:] {
+			k.value(key)
+			k.value(t[key])
+		}
+		k.keys = k.keys[:at]
+	case map[string]string:
+		k.tag('m')
+		at := pushKeys(k, t)
+		k.uint(uint64(len(k.keys) - at))
+		for _, key := range k.keys[at:] {
+			k.value(key)
+			k.value(t[key])
+		}
+		k.keys = k.keys[:at]
+	default:
+		// Anything else is rendered with %v and tagged distinctly, so an
+		// unsupported type still produces a stable key rather than a panic —
+		// but it is tagged 'u' so it can never collide with a handled type.
+		k.tag('u')
+		k.str(fmt.Sprintf("%T|%v", t, t))
+	}
+}
+
+// pushKeys appends m's keys to k.keys, sorts just that region, and returns
+// where the region starts. Hashing a map otherwise allocates a fresh slice
+// every call, and a map is the common case for a structured cache key.
+func pushKeys[V any](k *keyBuf, m map[string]V) int {
+	at := len(k.keys)
+	for key := range m {
+		k.keys = append(k.keys, key)
+	}
+	sort.Strings(k.keys[at:])
+	return at
 }
 
 // NormalizeSpace collapses every run of whitespace to a single space and trims

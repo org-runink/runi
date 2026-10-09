@@ -94,6 +94,38 @@ through a Kalman filter. If you need the coefficients themselves — not the
 forecast — statsmodels is the better tool today. Closing that gap is the open
 work on `arimax`, and it is a bigger prize than any speed-up on this page.
 
+## Event handling: the number that decides whether a handler keeps up
+
+An event mesh — a Kubernetes controller, a webhook fan-in, a change feed — does
+not receive distinct work. It receives the SAME object several times: once per
+watch, per replica, per retry, per relist. So the question that decides whether
+the handler keeps up is not how fast one handler runs. It is **how many times
+the expensive part runs for work that was already in flight.**
+
+2,000 events over 50 distinct objects, released in one burst, with a handler
+that costs 2 ms of I/O. The ideal is 50 executions, one per object.
+
+| Strategy | Handler ran | Wall |
+|---|---|---|
+| No deduplication | 2,000× | 5.03 ms |
+| **A mutex and a map** | **1,880×** | 5.93 ms |
+| `runi/memo` | **50×** | **3.18 ms** |
+
+**The middle row is the point.** A mutex and a map is what almost everyone
+writes, it is a correct cache, and in a burst it removed 6% of the redundant
+work — because every goroutine that arrives while the first is still working
+finds the map empty and starts again. The stampede is invisible in a
+sequential test, which is why it survives review.
+
+`memo` hit the ideal exactly, and finished *sooner* despite the coordination,
+because it did a fortieth of the work. That is 40× fewer calls to whatever the
+handler calls — an API server with a rate limit, a webhook, a model with a
+bill — not 40× on a nanosecond.
+
+The alternatives are implemented inside the benchmark rather than imported, so
+this needs no dependency the module refuses to take. Reproduce with
+`go run ./benchmarks/eventmesh`.
+
 ## Alongside a warehouse engine
 
 `runi` does not replace Spark, Databricks or Snowflake, and nothing here

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/rand/v2"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -244,5 +245,101 @@ func TestPropertyInvalidateRemovesExactlyOneKey(t *testing.T) {
 		if _, ok := s.Get(1); !ok {
 			t.Fatal("the store is unusable after Purge")
 		}
+	}
+}
+
+// Hash now builds its canonical form in a POOLED buffer and hashes it once.
+// That is the whole optimisation, and it is also the one way this function
+// could go wrong in a way no sequential test would show: a buffer that leaked
+// between goroutines, or a nested map that clobbered the scratch of the map
+// containing it, would produce a key that depends on what else was being
+// hashed at the time. These two properties are the ones that matter.
+
+// The same value hashes the same whether it is hashed alone or while hundreds
+// of other goroutines are hashing different values through the same pool.
+func TestPropertyHashIsUnaffectedByConcurrentHashing(t *testing.T) {
+	r := rand.New(rand.NewPCG(401, 402))
+
+	// A corpus, and its hashes computed quietly, one at a time.
+	corpus := make([][]any, 200)
+	want := make([]string, len(corpus))
+	for i := range corpus {
+		corpus[i] = []any{
+			fmt.Sprintf("k%d", r.IntN(50)),
+			map[string]any{
+				"a": r.IntN(1000),
+				"b": fmt.Sprint(r.IntN(1000)),
+				"c": map[string]string{"n": fmt.Sprint(r.IntN(100))},
+				"d": []any{r.IntN(10), "x", nil},
+			},
+			r.NormFloat64(),
+		}
+		want[i] = Hash(corpus[i]...)
+	}
+
+	// Now the same work, all at once.
+	var wg sync.WaitGroup
+	got := make([]string, len(corpus))
+	for round := 0; round < 8; round++ {
+		for i := range corpus {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				got[i] = Hash(corpus[i]...)
+			}(i)
+		}
+		wg.Wait()
+		for i := range corpus {
+			if got[i] != want[i] {
+				t.Fatalf("round %d, value %d: hashed %q alone and %q under load", round, i, want[i], got[i])
+			}
+		}
+	}
+}
+
+// A nested map must not disturb the map that contains it. The key scratch is
+// shared, so it is used as a stack: hashing {"outer": {"inner": ...}} has to
+// give the same answer as hashing the same structure built any other way.
+func TestPropertyNestedMapsDoNotClobberTheScratch(t *testing.T) {
+	r := rand.New(rand.NewPCG(403, 404))
+	for i := 0; i < 2000; i++ {
+		depth := 1 + r.IntN(6)
+		var build func(d int) any
+		build = func(d int) any {
+			if d == 0 {
+				return fmt.Sprint(r.IntN(100))
+			}
+			m := map[string]any{}
+			for j := 0; j < 1+r.IntN(4); j++ {
+				m[fmt.Sprintf("k%d", j)] = build(d - 1)
+			}
+			return m
+		}
+		v := build(depth)
+		first := Hash(v)
+		for rep := 0; rep < 4; rep++ {
+			// Hash something else in between, so a leaked scratch would show.
+			_ = Hash(map[string]any{"noise": []any{1, 2, 3, map[string]string{"q": "r"}}})
+			if again := Hash(v); again != first {
+				t.Fatalf("depth %d: %q then %q", depth, first, again)
+			}
+		}
+	}
+}
+
+// A key too large to be worth pooling is still hashed correctly, and the
+// buffer that held it is not parked in the pool for the life of the process.
+func TestPropertyAnOversizedKeyStillHashesStably(t *testing.T) {
+	big := strings.Repeat("x", (64<<10)+1024)
+	first := Hash(big, "tail")
+	for i := 0; i < 5; i++ {
+		_ = Hash("something", "small")
+		if again := Hash(big, "tail"); again != first {
+			t.Fatalf("oversized key hashed %q then %q", first, again)
+		}
+	}
+	// And a small key right after one is unaffected.
+	if a, b := Hash("small"), Hash("small"); a != b {
+		t.Fatalf("a small key after a large one: %q vs %q", a, b)
 	}
 }
