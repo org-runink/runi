@@ -725,21 +725,13 @@ the whole reason the tables quote medians.
 | OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33× faster** |
 | Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — `fastavro` | **8.9× faster** |
 | BM25, 200 queries over 5,000 docs | **79.0 ms** | 648.5 ms — `rank_bm25` | **8.2× faster** |
-<<<<<<< HEAD
-| Avro OCF read, 20,000 rows | **4.53 ms** | 18.2 ms — `fastavro` | **4.0× faster** |
-=======
 | Seasonal decomposition, n=4,000 | **0.0408 ms** | 0.161 ms — `statsmodels` `seasonal_decompose` | **3.9× faster** |
->>>>>>> origin/perf/season-classical
+| Avro OCF read, 20,000 rows | **4.53 ms** | 18.2 ms — `fastavro` | **4.0× faster** |
 | Pearson, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8× faster** |
 | Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6× faster** |
 | Spearman, n=200,000 | **17.9 ms** | 34.0 ms — `scipy.stats.spearmanr` | **1.9× faster** |
 | Index 5,000 docs | **65.4 ms** | 91.2 ms — `rank_bm25` | **1.4× faster** |
-<<<<<<< HEAD
-| Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — `statsmodels` | **9.5× slower** |
-=======
-| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — `fastavro` | **1.1× faster** |
 | …the same split by least squares instead, n=4,000 | 1.70 ms | **0.161 ms** — `statsmodels` | **10.6× slower** |
->>>>>>> origin/perf/season-classical
 
 The Avro file is also 740,202 bytes against fastavro's 741,181 — the same data,
 0.13% smaller, each readable by the other.
