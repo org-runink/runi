@@ -44,7 +44,50 @@ func stationary(phi []float64) bool {
 	return s < 0.999
 }
 
-// fitARMA estimates φ and θ by minimising the conditional sum of squares.
+// cssObjective is the conditional sum of squares of an ARMA(p,q) at the packed
+// parameter vector par = [phi..., theta...]. It is the single objective the
+// whole fit minimises — the ARMA block through Nelder-Mead here, and the
+// regression block through the exact least-squares solve in glsStep.
+func cssObjective(y []float64, p int) func([]float64) float64 {
+	return func(par []float64) float64 {
+		phi, theta := par[:p], par[p:]
+		if !stationary(phi) {
+			return math.Inf(1)
+		}
+		s := sumSquares(cssResiduals(y, phi, theta))
+		if math.IsNaN(s) {
+			return math.Inf(1)
+		}
+		return s
+	}
+}
+
+// sumSquares is the conditional sum of squares itself, once the residuals are
+// in hand. It is named because it is the quantity the whole fit descends on,
+// and a test that claims the fit never raises it has to measure the same thing
+// the fit minimises.
+func sumSquares(v []float64) float64 {
+	var s float64
+	for _, x := range v {
+		s += x * x
+	}
+	return s
+}
+
+// cssFit minimises the conditional sum of squares from a given start, with no
+// length checks: callers have already established that the series can carry
+// p+q parameters. step sizes the initial simplex, so a warm start can use a
+// small one.
+func cssFit(y []float64, p, q int, start []float64, step float64) *arma {
+	best, _ := nelderMead(cssObjective(y, p), start, 2000, step)
+	phi := append([]float64(nil), best[:p]...)
+	theta := append([]float64(nil), best[p:]...)
+	e := cssResiduals(y, phi, theta)
+	return &arma{phi: phi, theta: theta, sigma2: variance(e), resid: e}
+}
+
+// fitARMA estimates φ and θ by minimising the conditional sum of squares from
+// a cold start.
 func fitARMA(y []float64, p, q int) (*arma, error) {
 	if p < 0 || q < 0 {
 		return nil, errOrder
@@ -61,33 +104,19 @@ func fitARMA(y []float64, p, q int) (*arma, error) {
 		copy(e, y)
 		return &arma{sigma2: variance(e), resid: e}, nil
 	}
-	obj := func(par []float64) float64 {
-		phi, theta := par[:p], par[p:]
-		if !stationary(phi) {
-			return math.Inf(1)
-		}
-		e := cssResiduals(y, phi, theta)
-		var s float64
-		for _, v := range e {
-			s += v * v
-		}
-		if math.IsNaN(s) {
-			return math.Inf(1)
-		}
-		return s
-	}
 	start := make([]float64, p+q)
 	// A small positive AR start is a better basin than zero for the persistent
 	// series this package targets; MA terms start at zero.
 	for i := 0; i < p; i++ {
 		start[i] = 0.1
 	}
-	best, _ := nelderMead(obj, start, 2000)
-	phi := append([]float64(nil), best[:p]...)
-	theta := append([]float64(nil), best[p:]...)
-	e := cssResiduals(y, phi, theta)
-	return &arma{phi: phi, theta: theta, sigma2: variance(e), resid: e}, nil
+	return cssFit(y, p, q, start, coldStep), nil
 }
+
+// coldStep is the initial simplex offset with no information about where the
+// optimum is: large enough to escape a flat start, small enough to stay in a
+// stationary region.
+const coldStep = 0.10
 
 func variance(e []float64) float64 {
 	if len(e) < 2 {

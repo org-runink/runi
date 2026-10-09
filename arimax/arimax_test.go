@@ -103,7 +103,8 @@ func TestACFPACFOnAR1(t *testing.T) {
 
 func TestFitRecoversExogenousBeta(t *testing.T) {
 	// y = 5 + 2.5*x + AR(1) noise. Beta must come back despite the serial
-	// correlation — that is the whole point of the staged fit.
+	// correlation — that is the whole point of the regression-with-ARIMA-errors
+	// form.
 	g := lcg(7)
 	n := 600
 	x := make([]float64, n)

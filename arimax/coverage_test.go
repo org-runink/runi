@@ -99,3 +99,55 @@ func TestFitSeriesTooShortForDifferencing(t *testing.T) {
 		t.Fatalf("err = %v, want errShort", err)
 	}
 }
+
+// Prewhitening consumes observations: d of them to difference and p more to
+// condition on. A design that ordinary least squares can solve in levels can
+// therefore be over-determined once filtered, and the generalised-least-squares
+// step has to refuse rather than solve a system with fewer rows than columns.
+//
+// What must come back is the STAGED estimate — a worse estimate of beta, but a
+// real one — not an error and not a fabricated refinement. Here n=6 with four
+// regressors leaves 5 filtered rows for 5 columns, one short.
+func TestGLSStepRefusesAnOverDeterminedWhitenedDesign(t *testing.T) {
+	const n, k = 6, 4
+	cols := k + 1
+	y := make([]float64, n)
+	x := make([]float64, n*k)
+	g := lcg(4242)
+	for i := 0; i < n; i++ {
+		for j := 0; j < k; j++ {
+			x[i*k+j] = g.next()
+		}
+		y[i] = 1 + float64(i) + g.next()
+	}
+
+	// The step itself refuses.
+	design := make([]float64, n*cols)
+	for i := 0; i < n; i++ {
+		design[i*cols] = 1
+		for j := 0; j < k; j++ {
+			design[i*cols+1+j] = x[i*k+j]
+		}
+	}
+	if _, err := glsStep(y, design, n, cols, 0, 0, []float64{0.5}, []float64{0.2}); !errors.Is(err, errShort) {
+		t.Fatalf("glsStep err = %v, want errShort", err)
+	}
+
+	// And Fit still returns the staged fit, to the digit.
+	m, err := Fit(y, x, k, Order{P: 1, Q: 1})
+	if err != nil {
+		t.Fatalf("Fit: %v", err)
+	}
+	scratch := make([]float64, len(design))
+	copy(scratch, design)
+	want, err := olsQR(scratch, y, n, cols)
+	if err != nil {
+		t.Fatalf("olsQR: %v", err)
+	}
+	got := append([]float64{m.Intercept}, m.Beta...)
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("coefficient %d = %v, want the OLS value %v", i, got[i], want[i])
+		}
+	}
+}
