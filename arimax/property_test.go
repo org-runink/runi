@@ -237,3 +237,225 @@ func TestPropertyMetricsMatchTheirDefinitions(t *testing.T) {
 		}
 	}
 }
+
+// stagedFitCSS reproduces the estimator refine replaced — one ordinary least
+// squares solve, then one ARMA fit to whatever is left — and returns its
+// conditional sum of squares. It is the baseline the refinement must never do
+// worse than, and it is written out here rather than reached through a flag on
+// Fit so that it cannot drift into agreeing with whatever Fit now does.
+func stagedFitCSS(y, x []float64, n, k int, ord Order) (float64, bool) {
+	cols := k + 1
+	design := make([]float64, n*cols)
+	for i := 0; i < n; i++ {
+		design[i*cols] = 1
+		for j := 0; j < k; j++ {
+			design[i*cols+1+j] = x[i*k+j]
+		}
+	}
+	coef, err := olsQR(design, y, n, cols)
+	if err != nil {
+		return 0, false
+	}
+	a, err := fitARMA(Difference(regressErrors(y, x, n, k, coef), ord.D), ord.P, ord.Q)
+	if err != nil {
+		return 0, false
+	}
+	return sumSquares(a.resid), true
+}
+
+// levelDesign builds the row-major [1, X] design Fit builds internally.
+func levelDesign(x []float64, n, k int) []float64 {
+	cols := k + 1
+	design := make([]float64, n*cols)
+	for i := 0; i < n; i++ {
+		design[i*cols] = 1
+		for j := 0; j < k; j++ {
+			design[i*cols+1+j] = x[i*k+j]
+		}
+	}
+	return design
+}
+
+// randomExogSeries draws a series with autocorrelated errors, a mild trend and
+// k exogenous regressors -- the shape of input Fit is given in practice.
+func randomExogSeries(r *rand.Rand) (y, x []float64, n, k int) {
+	n = 40 + r.IntN(200)
+	k = r.IntN(3)
+	x = make([]float64, n*k)
+	for j := range x {
+		x[j] = r.NormFloat64()
+	}
+	y = make([]float64, n)
+	var nt float64
+	for j := range y {
+		nt = 0.7*nt + r.NormFloat64()
+		y[j] = 0.5 + nt + 0.03*float64(j)
+		for c := 0; c < k; c++ {
+			y[j] += float64(c+1) * x[j*k+c]
+		}
+	}
+	return y, x, n, k
+}
+
+// The conditional sum of squares is ONE objective, and refine descends on it
+// in two blocks rather than fitting each block once. So the fit it returns can
+// never score worse on that objective than the staged fit it starts from:
+// the generalised-least-squares half-step is the exact minimiser over the
+// coefficients at fixed phi and theta, and the ARMA half-step is warm started,
+// which Nelder-Mead keeps as a simplex vertex.
+//
+// This is the property that justifies the whole change, and it is measured
+// here rather than asserted at runtime. A guard inside refine could not be
+// entered by any test, so it would report a property it never verified.
+func TestPropertyRefineNeverRaisesTheConditionalSumOfSquares(t *testing.T) {
+	r := rand.New(rand.NewPCG(901, 902))
+	cases, worst := 0, 0.0
+	for i := 0; i < 400; i++ {
+		y, x, n, k := randomExogSeries(r)
+		ord := Order{P: r.IntN(3), D: r.IntN(2), Q: r.IntN(3)}
+		m, err := Fit(y, x, k, ord)
+		if err != nil {
+			continue // refusing an order it cannot fit is correct
+		}
+		staged, ok := stagedFitCSS(y, x, n, k, ord)
+		if !ok {
+			continue
+		}
+		got := sumSquares(m.Residuals)
+		cases++
+		rise := (got - staged) / (staged + 1e-300)
+		if rise > worst {
+			worst = rise
+		}
+		// The tolerance is for floating-point summation only. Anything the
+		// refinement actually does to the objective shows up far above it.
+		if rise > 1e-9 {
+			t.Fatalf("%v n=%d k=%d: conditional sum of squares rose from %.10g to %.10g (%+.3g relative)",
+				ord, n, k, staged, got, rise)
+		}
+	}
+	if cases < 200 {
+		t.Fatalf("only %d cases fitted; the property was barely exercised", cases)
+	}
+	t.Logf("conditional sum of squares over %d fits: worst relative rise %.3g", cases, worst)
+}
+
+// Prewhitening is a LINEAR filter with fixed zero pre-sample values, which is
+// the reason the generalised-least-squares step is exact rather than
+// approximate: filtering y - X*beta gives filter(y) - filter(X)*beta exactly.
+// The visible consequence is that a noise-free linear response is still
+// recovered exactly after the filter is applied, whatever ARMA the refinement
+// happens to have fitted to the floating-point dust left over.
+//
+// It is the companion to TestPropertyFitRecoversAnExactSlope, which covers the
+// orders that skip the refinement entirely.
+func TestPropertyRefinePreservesAnExactFit(t *testing.T) {
+	r := rand.New(rand.NewPCG(213, 214))
+	orders := []Order{{P: 1}, {Q: 1}, {P: 1, Q: 1}, {P: 2, Q: 1}}
+	worst := 0.0
+	for i := 0; i < 200; i++ {
+		n := 60 + r.IntN(100)
+		beta := -5 + 10*r.Float64()
+		intercept := -3 + 6*r.Float64()
+		x := make([]float64, n)
+		y := make([]float64, n)
+		for j := range y {
+			x[j] = r.NormFloat64() * 3
+			y[j] = intercept + beta*x[j] // no noise: the fit is exact
+		}
+		for _, ord := range orders {
+			m, err := Fit(y, x, 1, ord)
+			if err != nil {
+				t.Fatalf("n=%d %v: %v", n, ord, err)
+			}
+			eb := math.Abs(m.Beta[0]-beta) / (1 + math.Abs(beta))
+			ec := math.Abs(m.Intercept-intercept) / (1 + math.Abs(intercept))
+			if eb > worst {
+				worst = eb
+			}
+			if ec > worst {
+				worst = ec
+			}
+			if eb > 1e-9 || ec > 1e-9 {
+				t.Fatalf("n=%d %v: beta %v -> %v, intercept %v -> %v",
+					n, ord, beta, m.Beta[0], intercept, m.Intercept)
+			}
+		}
+	}
+	t.Logf("exact fit preserved through prewhitening to %.3g relative over %d fits", worst, 200*len(orders))
+}
+
+// The alternation has to settle, not oscillate. On a WELL-SPECIFIED stationary
+// series -- the case the estimator is for -- one further pass past what Fit
+// does must barely move the coefficients.
+//
+// This is a divergence guard, not a proof of convergence: refine is capped at
+// maxRefine passes and on a misspecified or near-unidentified series (phi and
+// theta nearly cancelling, or an AR root driven to the stationarity bound) it
+// can still be moving when the cap is reached. That is stated in refine's
+// documentation rather than hidden behind a tighter bound here that only holds
+// for the easy cases.
+func TestPropertyRefineSettlesOnAWellSpecifiedSeries(t *testing.T) {
+	const bound = 0.05 // measured worst: 0.0092
+	r := rand.New(rand.NewPCG(777, 778))
+	cases, worst := 0, 0.0
+	for i := 0; i < 300; i++ {
+		n := 120 + r.IntN(300)
+		k := 1 + r.IntN(2)
+		phi := -0.8 + 1.6*r.Float64()
+		theta := -0.8 + 1.6*r.Float64()
+		x := make([]float64, n*k)
+		for j := range x {
+			x[j] = r.NormFloat64()
+		}
+		y := make([]float64, n)
+		var nt, prev float64
+		for j := 0; j < n; j++ {
+			e := r.NormFloat64()
+			nt = phi*nt + e + theta*prev
+			prev = e
+			y[j] = 2 + nt
+			for c := 0; c < k; c++ {
+				y[j] += float64(c+1) * x[j*k+c]
+			}
+		}
+		ord := Order{P: 1, Q: 1}
+		m, err := Fit(y, x, k, ord)
+		if err != nil {
+			continue
+		}
+		cases++
+
+		// One more pass, started from exactly where Fit stopped.
+		coef := append([]float64{m.Intercept}, m.Beta...)
+		st := &fitState{
+			y: y, x: x, design: levelDesign(x, n, k),
+			n: n, k: k, cols: k + 1, ord: ord,
+			coef: append([]float64(nil), coef...), errs: m.errs,
+			arma: &arma{phi: m.AR, theta: m.MA},
+		}
+		st.refine()
+
+		var move, scale float64
+		for j := range coef {
+			if d := math.Abs(st.coef[j] - coef[j]); d > move {
+				move = d
+			}
+			if a := math.Abs(coef[j]); a > scale {
+				scale = a
+			}
+		}
+		rel := move / (1 + scale)
+		if rel > worst {
+			worst = rel
+		}
+		if rel > bound {
+			t.Fatalf("n=%d k=%d phi=%.2f theta=%.2f: a further pass moved the coefficients by %.3g relative",
+				n, k, phi, theta, rel)
+		}
+	}
+	if cases < 200 {
+		t.Fatalf("only %d cases fitted", cases)
+	}
+	t.Logf("a further pass moves the coefficients by at most %.3g relative over %d fits", worst, cases)
+}

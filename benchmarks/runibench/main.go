@@ -194,7 +194,7 @@ func main() {
 	res := map[string]any{
 		"library":        "runi/arimax",
 		"version":        "v0.1.7",
-		"estimator":      "staged regression with ARIMA errors, conditional sum of squares",
+		"estimator":      "regression with ARIMA errors; conditional least squares by prewhitened GLS alternated with the ARMA refit",
 		"import_seconds": 0,
 		"accuracy":       runAccuracy(dir, m),
 		"timing":         runTiming(dir),

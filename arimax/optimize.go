@@ -9,17 +9,24 @@ import "math"
 //
 // Deterministic: the initial simplex is a fixed perturbation of start, so the
 // same input always gives the same result.
-func nelderMead(f func([]float64) float64, start []float64, maxIter int) ([]float64, float64) {
+//
+// step is the relative offset of the initial simplex from start. It is a
+// parameter rather than a constant because a warm start wants a small simplex:
+// restarted from parameters that are already close, a cold-sized simplex
+// spends its whole budget shrinking back to where it began.
+//
+// start is always a vertex of the initial simplex, so the returned point is
+// never worse than start. refine depends on that.
+func nelderMead(f func([]float64) float64, start []float64, maxIter int, step float64) ([]float64, float64) {
 	n := len(start)
 	if n == 0 {
 		return nil, f(nil)
 	}
 	const (
-		alpha = 1.0  // reflection
-		gamma = 2.0  // expansion
-		rho   = 0.5  // contraction
-		sigma = 0.5  // shrink
-		step  = 0.10 // initial simplex offset
+		alpha = 1.0 // reflection
+		gamma = 2.0 // expansion
+		rho   = 0.5 // contraction
+		sigma = 0.5 // shrink
 	)
 	pts := make([][]float64, n+1)
 	val := make([]float64, n+1)

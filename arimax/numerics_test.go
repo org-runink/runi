@@ -96,7 +96,7 @@ func TestOLSQRHandlesADuplicatedColumn(t *testing.T) {
 
 func TestNelderMeadEmptyStart(t *testing.T) {
 	called := false
-	got, v := nelderMead(func(p []float64) float64 { called = true; return 42 }, nil, 100)
+	got, v := nelderMead(func(p []float64) float64 { called = true; return 42 }, nil, 100, coldStep)
 	if got != nil {
 		t.Fatalf("nelderMead(nil start) params = %v; want nil", got)
 	}
@@ -113,7 +113,7 @@ func TestNelderMeadBuildsASimplexFromZeroStart(t *testing.T) {
 		// Minimum at (1, -2).
 		return (p[0]-1)*(p[0]-1) + (p[1]+2)*(p[1]+2)
 	}
-	got, v := nelderMead(f, []float64{0, 0}, 2000)
+	got, v := nelderMead(f, []float64{0, 0}, 2000, coldStep)
 	if len(got) != 2 {
 		t.Fatalf("params = %v; want 2", got)
 	}
@@ -132,7 +132,7 @@ func TestNelderMeadShrinksOnAHardSurface(t *testing.T) {
 		a, b := 1-p[0], p[1]-p[0]*p[0]
 		return a*a + 100*b*b
 	}
-	got, v := nelderMead(f, []float64{-1.2, 1.0}, 4000)
+	got, v := nelderMead(f, []float64{-1.2, 1.0}, 4000, coldStep)
 	if math.IsNaN(v) || math.IsInf(v, 0) {
 		t.Fatalf("objective = %v; want finite", v)
 	}
@@ -251,7 +251,7 @@ func TestNelderMeadOnADiscontinuousSurface(t *testing.T) {
 		}
 		return s
 	}
-	got, v := nelderMead(f, []float64{3.7, -2.9}, 3000)
+	got, v := nelderMead(f, []float64{3.7, -2.9}, 3000, coldStep)
 	if len(got) != 2 {
 		t.Fatalf("params = %v; want 2", got)
 	}
@@ -272,7 +272,7 @@ func TestNelderMeadOnAFlatSurface(t *testing.T) {
 	// Every vertex scores identically, so no move ever improves. The simplex
 	// must collapse and the loop must exit on its iteration bound.
 	f := func(p []float64) float64 { return 1.0 }
-	got, v := nelderMead(f, []float64{1, 2, 3}, 500)
+	got, v := nelderMead(f, []float64{1, 2, 3}, 500, coldStep)
 	if len(got) != 3 || v != 1.0 {
 		t.Fatalf("flat surface = %v,%v; want 3 finite params and 1.0", got, v)
 	}

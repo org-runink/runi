@@ -33,9 +33,11 @@ type Model struct {
 // Fit estimates an ARIMAX model of y with optional exogenous regressors.
 //
 // x is row-major with one row per observation of y and k columns, or nil for a
-// plain ARIMA. Fitting is staged — ordinary least squares for the regressors,
-// then an ARMA fit to the regression errors — which is the
-// regression-with-ARIMA-errors form described in the package documentation.
+// plain ARIMA. The form fitted is regression with ARIMA errors, as described in
+// the package documentation; the estimator is conditional least squares over
+// the regression and ARMA parameters jointly, reached by alternating an exact
+// generalised-least-squares solve for the coefficients on prewhitened data
+// with a Nelder-Mead refit of the ARMA. It is not exact maximum likelihood.
 func Fit(y []float64, x []float64, k int, ord Order) (*Model, error) {
 	n := len(y)
 	if ord.P < 0 || ord.D < 0 || ord.Q < 0 {
@@ -65,33 +67,41 @@ func Fit(y []float64, x []float64, k int, ord Order) (*Model, error) {
 			design[i*cols+1+j] = x[i*k+j]
 		}
 	}
-	coef, err := olsQR(design, y, n, cols)
+	// olsQR overwrites the design it factors, and stage 3 needs the original
+	// columns to prewhiten, so the factorisation works on a scratch copy.
+	scratch := make([]float64, len(design))
+	copy(scratch, design)
+	coef, err := olsQR(scratch, y, n, cols)
 	if err != nil {
 		return nil, err
-	}
-	m.Intercept = coef[0]
-	if k > 0 {
-		m.Beta = append([]float64(nil), coef[1:]...)
 	}
 
 	// Regression errors n_t = y_t − β'X_t − c.
-	errs := make([]float64, n)
-	for i := 0; i < n; i++ {
-		fit := m.Intercept
-		for j := 0; j < k; j++ {
-			fit += m.Beta[j] * x[i*k+j]
-		}
-		errs[i] = y[i] - fit
-	}
-	m.errs = errs
+	errs := regressErrors(y, x, n, k, coef)
 
 	// Stage 2: ARMA on the differenced regression errors.
-	d := Difference(errs, ord.D)
-	a, err := fitARMA(d, ord.P, ord.Q)
+	a, err := fitARMA(Difference(errs, ord.D), ord.P, ord.Q)
 	if err != nil {
 		return nil, err
 	}
-	m.AR, m.MA, m.Sigma2, m.Residuals = a.phi, a.theta, a.sigma2, a.resid
+
+	// Stage 3: alternate the two blocks until the coefficients settle. Stages 1
+	// and 2 on their own estimate β as if the errors were independent, which
+	// costs it about half its precision on the persistent errors this package
+	// targets. See refine.
+	st := &fitState{
+		y: y, x: x, design: design,
+		n: n, k: k, cols: cols,
+		ord: ord, coef: coef, errs: errs, arma: a,
+	}
+	st.refine()
+
+	m.Intercept = st.coef[0]
+	if k > 0 {
+		m.Beta = append([]float64(nil), st.coef[1:]...)
+	}
+	m.errs = st.errs
+	m.AR, m.MA, m.Sigma2, m.Residuals = st.arma.phi, st.arma.theta, st.arma.sigma2, st.arma.resid
 	return m, nil
 }
 
