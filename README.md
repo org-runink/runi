@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Twelve small Go packages, zero dependencies, every claim measured.</em>
+  Eleven small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
+  <img src="https://img.shields.io/badge/packages-11-informational" alt="eleven packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -96,7 +96,6 @@ you are still the one doing the work.
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
-| 🔐 **the collar** | [`certissue`](#runicertissue--short-lived-certificates-the-ca-key-out-of-reach) | Papers that say who he is at every gate, and expire before anyone else can use them |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -1020,7 +1019,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the twelve packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the eleven packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1030,14 +1029,12 @@ continuously verified in CI, not asserted once.
 **Runtime behaviour**, since questionnaires ask: no network access, no filesystem
 access, no subprocesses, no `unsafe`, no cgo, no reflection over untrusted input.
 Deterministic — same input, same output, with the only clock read being one the
-caller injects for testing expiry. The one exception is `certissue`, whose keys,
-serial numbers and signatures are random by design and come from `crypto/rand`.
+caller injects for testing expiry.
 
 **What this is not**, stated so nobody infers it: `memo.Hash` uses SHA-256 to
 derive cache keys and is **not** a security boundary; the packages perform no
-authentication, and apart from `certissue` (which checks certificate requests
-and enforces the policy you give it) no authorisation or input validation;
-`memo` is in-process only, with no listener and nothing shared between replicas.
+authentication, authorisation or input validation; `memo` is in-process only,
+with no listener and nothing shared between replicas.
 
 ## Used by
 
