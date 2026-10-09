@@ -133,5 +133,8 @@ python benchmarks/baselines.py      # rank-bm25, scipy, statsmodels, fastavro
 python benchmarks/spark_bench.py    # SparkML, needs a JVM
 ```
 
-Results land in `benchmarks/results_*.json`, which is what the tables are built
-from.
+Results land in `benchmarks/results_*.json`. Those files hold **one** run.
+The tables above are medians across five runs for `runi` and three for Python,
+because a single run of the sub-millisecond rows lands anywhere in a ±40%
+spread; the committed JSON is there so the shape of the output is inspectable,
+not so a reader can match it digit for digit against a median.

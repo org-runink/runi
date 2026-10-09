@@ -632,8 +632,11 @@ unrelated work throughout. Each figure is the **median of five runs** for `runi`
 and three for Python, each of which is itself a median over repetitions.
 
 Reproduce it with `python benchmarks/baselines.py` and
-`go run ./benchmarks/crossbench`; the method and the raw JSON are in
-[benchmarks/README.md](benchmarks/README.md).
+`go run ./benchmarks/crossbench`; the method is in
+[benchmarks/README.md](benchmarks/README.md). The `results_*.json` files
+committed beside them are **one** of those runs, not the median — a single run
+of the sub-millisecond rows lands anywhere in the spread noted below, which is
+the whole reason the tables quote medians.
 
 | Operation | `runi` | The library people use | |
 |---|---:|---:|---|
