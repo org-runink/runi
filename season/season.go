@@ -48,14 +48,23 @@ import (
 )
 
 // MinPeriodLength is the shortest series Period will look for a cycle in.
-const MinPeriodLength = 8
+//
+// 28, because that is the shortest series in which a cycle can actually be
+// found, and a lower figure would be a promise the function cannot keep. The
+// bar a lag must clear rises as the series shortens (see periodThreshold),
+// while the most the estimator can report at lag L falls to about 1 − L/m.
+// Below 28 points the bar is above the ceiling: no series of any shape clears
+// it, so Period returns 0 whatever it is given. Callers passing 8 to 27 points
+// got that same 0 before this constant said so; what changes is that the
+// package no longer advertises a floor it cannot answer above.
+const MinPeriodLength = 28
 
 // ErrTooShort is returned when a series has too few points to model.
 var ErrTooShort = errors.New("season: series too short")
 
 // Period returns the dominant seasonal period of x, or 0 when there is none.
 //
-// It looks for the lag with the strongest autocorrelation of the
+// It looks for the highest PEAK in the autocorrelation of the
 // once-differenced series (differencing removes a linear trend, which would
 // otherwise correlate with itself at every lag). A lag counts only if its
 // autocorrelation clears periodThreshold — a bar raised for the number of lags
@@ -106,15 +115,41 @@ func Period(x []float64, maxPeriod int) int {
 	if maxLag < 2 {
 		return 0
 	}
-	best, bestR := 0, periodThreshold(m, maxLag-1)
-	for lag := 2; lag <= maxLag; lag++ {
+	// The autocorrelation at every lag, kept so that a PEAK can be chosen
+	// rather than the largest value.
+	//
+	// The largest value is the wrong answer for any smooth cycle. This
+	// estimator divides a sum of m−lag products by the variance of all m, so
+	// what it reports tapers by roughly (1 − lag/m), while a sinusoid's true
+	// autocorrelation at a SHORT lag is already close to 1 — cos(4π/P) at lag
+	// 2. Past P ≈ 25 the taper costs lag P more than the curve costs lag 2,
+	// the global maximum moves to lag 2, and a monthly cycle is reported as a
+	// three-day one. Not "no season", which a caller would question, but a
+	// confident wrong period that Decompose and every forecast taken from it
+	// then builds on. A season is a peak in the autocorrelation; take the
+	// highest peak.
+	r := make([]float64, maxLag+2)
+	for lag := 1; lag <= maxLag+1 && lag < m; lag++ {
 		c := 0.0
 		for i := 0; i+lag < m; i++ {
 			c += (d[i] - mean) * (d[i+lag] - mean)
 		}
-		if r := c / var0; r > bestR {
-			best, bestR = lag, r
+		r[lag] = c / var0
+	}
+
+	best, bestR := 0, periodThreshold(m, maxLag-1)
+	for lag := 2; lag <= maxLag; lag++ {
+		if r[lag] <= bestR {
+			continue
 		}
+		// No lower than either neighbour. The lag just past maxLag is measured
+		// above for exactly this comparison, so the last candidate is judged
+		// on the same footing as the rest rather than being accepted for want
+		// of anything to compare it with.
+		if r[lag] < r[lag-1] || r[lag] < r[lag+1] {
+			continue
+		}
+		best, bestR = lag, r[lag]
 	}
 	if best == 0 {
 		return 0
