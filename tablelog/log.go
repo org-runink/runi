@@ -299,7 +299,7 @@ func (t *Table) readCheckpoint(ctx context.Context, v int64) (*state, error) {
 // concurrent writer of the same checkpoint is fine (same content, first wins).
 func (t *Table) writeCheckpoint(ctx context.Context, s *state) error {
 	var buf bytes.Buffer
-	if err := avro.WriteOCF(&buf, checkpointSchema, avro.CodecDeflate, s.sortedFiles(), marshalCP); err != nil {
+	if err := writeCPOCF(&buf, checkpointSchema, avro.CodecDeflate, s.sortedFiles(), marshalCP); err != nil {
 		return err
 	}
 	if err := t.st.PutIfAbsent(ctx, t.checkpointKey(s.version), buf.Bytes()); err != nil && !errors.Is(err, ErrExists) {
@@ -358,6 +358,10 @@ func (t *Table) commit(ctx context.Context, a action) (int64, error) {
 		}
 		body, err := json.Marshal(e)
 		if err != nil {
+			// Not reachable: logEntry is strings, ints and slices of those.
+			// Checked rather than ignored because the day someone adds a field
+			// that cannot be marshalled, this must fail the commit rather than
+			// write an empty log object.
 			return 0, err
 		}
 		err = t.st.PutIfAbsent(ctx, t.logKey(e.Version), body)
@@ -398,3 +402,8 @@ func (t *Table) backoff(ctx context.Context, attempt int) error {
 		return nil
 	}
 }
+
+// writeCPOCF is avro.WriteOCF behind a variable, for the same reason as
+// writeRowsOCF: the failure is real but unreachable from a caller, and a
+// checkpoint that cannot be encoded must not be reported as written.
+var writeCPOCF = avro.WriteOCF[fileEntry]

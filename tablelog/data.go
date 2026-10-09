@@ -127,7 +127,7 @@ func dataFileCreated(path string) (time.Time, bool) {
 // returns its log entry. Nothing references it until a commit does.
 func (t *Table) writeDataFile(ctx context.Context, rs []row) (fileEntry, error) {
 	var buf bytes.Buffer
-	if err := avro.WriteOCF(&buf, rowSchema, avro.CodecDeflate, rs, marshalRow); err != nil {
+	if err := writeRowsOCF(&buf, rowSchema, avro.CodecDeflate, rs, marshalRow); err != nil {
 		return fileEntry{}, fmt.Errorf("tablelog: encode: %w", err)
 	}
 	fe := fileEntry{Path: t.newDataPath(), Rows: int64(len(rs)), Bytes: int64(buf.Len())}
@@ -194,3 +194,11 @@ func (t *Table) readFiles(ctx context.Context, files []fileEntry) ([][]row, erro
 	}
 	return out, nil
 }
+
+// writeRowsOCF is avro.WriteOCF behind a variable. Encoding writes to an
+// in-memory buffer, so the only way it fails is if the sync marker cannot be
+// generated — real, but not something a caller of this package can arrange.
+// The error is returned rather than ignored because a data file written
+// without a usable marker cannot be read back, and an error that is returned
+// but never exercised is not known to work.
+var writeRowsOCF = avro.WriteOCF[row]
