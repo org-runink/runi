@@ -60,7 +60,6 @@ package stats
 import (
 	"errors"
 	"math"
-	"sort"
 )
 
 // ErrEmpty is returned when a computation has no data to work with.
@@ -205,17 +204,218 @@ func extreme(x []float64, wantMin bool) float64 {
 // default and R's type 7, so a number computed here matches one computed there.
 //
 // It does not modify x: the data is copied before sorting.
-func Quantile(x []float64, q float64) float64 {
-	if len(x) == 0 || q < 0 || q > 1 || math.IsNaN(q) {
-		return math.NaN()
+//
+// Asking for several quantiles of the same column calls [Quantiles] instead:
+// each call here sorts its own copy, so three quantiles of a 200,000-point
+// column is three sorts of 200,000 points.
+func Quantile(x []float64, q float64) float64 { return Quantiles(x, q)[0] }
+
+// Quantiles returns several quantiles of x from ONE sorted copy, in the order
+// asked for. It is the function to reach for when summarising a column, which
+// is the common case: a median and a pair of tails is three calls to
+// [Quantile] and therefore three copies and three sorts of the same data, for
+// an answer that needs one.
+//
+// The copy is ordered by a radix sort over the IEEE-754 bit patterns rather
+// than by comparison, which is linear in the length of the column instead of
+// n·log n and does not call a comparator through an interface.
+//
+// Every quantile is NaN if x is empty or holds a NaN, and an individual
+// quantile is NaN if its q is outside [0,1] — the same rule [Quantile]
+// follows, applied element by element. Use [DropNaN] first to summarise a
+// column that has gaps in it.
+func Quantiles(x []float64, qs ...float64) []float64 {
+	out := make([]float64, len(qs))
+	if len(x) == 0 {
+		for i := range out {
+			out[i] = math.NaN()
+		}
+		return out
 	}
-	s := append([]float64(nil), x...)
-	for _, v := range s {
-		if math.IsNaN(v) {
-			return math.NaN()
+	// A copy either way: the caller's data is never reordered.
+	s := make([]float64, len(x))
+	for i, v := range x {
+		if math.IsNaN(v) { // a NaN anywhere makes every quantile undefined
+			for j := range out {
+				out[j] = math.NaN()
+			}
+			return out
+		}
+		s[i] = v
+	}
+
+	// A quantile needs at most two order statistics, so a handful of them
+	// needs a handful of positions out of n. Putting just those positions in
+	// place is linear in n; ordering the whole column to read five values out
+	// of it is n·log n, and for a 200,000-point column that is most of the
+	// work thrown away. Beyond a certain number of quantiles the selects stop
+	// being cheaper than one ordering, and the sort wins.
+	need := neededIndices(len(s), qs)
+	if len(need) <= selectCutoff {
+		multiSelect(s, need)
+	} else {
+		radixSortFloats(s)
+	}
+	for i, q := range qs {
+		out[i] = quantileOfSorted(s, q)
+	}
+	return out
+}
+
+// selectCutoff is where selecting individual positions stops paying. Each
+// select is a partition pass over what is left, so a few are much cheaper than
+// an ordering and many are not.
+const selectCutoff = 16
+
+// neededIndices returns the sorted, deduplicated order statistics the given
+// quantiles read, for a column of length n.
+func neededIndices(n int, qs []float64) []int {
+	seen := make([]int, 0, 2*len(qs))
+	for _, q := range qs {
+		if q < 0 || q > 1 || math.IsNaN(q) || n < 2 {
+			continue
+		}
+		pos := q * float64(n-1)
+		lo := int(math.Floor(pos))
+		hi := int(math.Ceil(pos))
+		seen = append(seen, lo, hi)
+	}
+	sortInts(seen)
+	out := seen[:0]
+	for i, k := range seen {
+		if i == 0 || k != seen[i-1] {
+			out = append(out, k)
 		}
 	}
-	sort.Float64s(s)
+	return out
+}
+
+func sortInts(a []int) {
+	for i := 1; i < len(a); i++ {
+		for j := i; j > 0 && a[j] < a[j-1]; j-- {
+			a[j], a[j-1] = a[j-1], a[j]
+		}
+	}
+}
+
+// multiSelect puts each index in ks holding the value it would hold if s were
+// fully sorted. Everything else is left in an arbitrary order, which is all a
+// quantile needs.
+//
+// ks comes from neededIndices, which returns it ascending and deduplicated, so
+// each index is strictly greater than the one before and the window only ever
+// moves forward. There is no guard here for an out-of-order ks because there
+// is no way to reach one.
+func multiSelect(s []float64, ks []int) {
+	left := 0
+	for _, k := range ks {
+		quickSelect(s, left, len(s)-1, k)
+		// Everything at or below k is now no greater than s[k], so the next
+		// position can only be above it.
+		left = k
+	}
+}
+
+// quickSelect puts s[k] where it belongs within s[lo:hi+1].
+//
+// It falls back to ordering the range once it has partitioned more times than
+// a well-behaved input ever needs. Median-of-three makes the quadratic case
+// rare rather than impossible, and "rare" is not a guarantee a caller can rely
+// on when the data is someone else's.
+func quickSelect(s []float64, lo, hi, k int) {
+	budget := 2 * bitLen(uint(hi-lo+1))
+	for lo < hi {
+		if budget <= 0 {
+			radixSortFloats(s[lo : hi+1])
+			return
+		}
+		budget--
+		p := partition(s, lo, hi)
+		switch {
+		case k == p:
+			return
+		case k < p:
+			hi = p - 1
+		default:
+			lo = p + 1
+		}
+	}
+}
+
+func bitLen(v uint) int {
+	n := 0
+	for v > 0 {
+		n++
+		v >>= 1
+	}
+	return n
+}
+
+// partition is Hoare's scheme around a median-of-three pivot, returning the
+// pivot's final position.
+func partition(s []float64, lo, hi int) int {
+	mid := lo + (hi-lo)/2
+	if s[mid] < s[lo] {
+		s[mid], s[lo] = s[lo], s[mid]
+	}
+	if s[hi] < s[lo] {
+		s[hi], s[lo] = s[lo], s[hi]
+	}
+	if s[hi] < s[mid] {
+		s[hi], s[mid] = s[mid], s[hi]
+	}
+	// s[lo] <= s[mid] <= s[hi] now, so the median is the pivot. Park it at hi
+	// and run Lomuto against it; parking it anywhere else while comparing
+	// against s[hi] partitions around a value that is not the pivot.
+	s[mid], s[hi] = s[hi], s[mid]
+	pivot := s[hi]
+
+	i := lo
+	for j := lo; j < hi; j++ {
+		if s[j] < pivot {
+			s[i], s[j] = s[j], s[i]
+			i++
+		}
+	}
+	s[i], s[hi] = s[hi], s[i]
+	return i
+}
+
+// sortedCopy returns x sorted ascending, or nil if x holds a NaN. The caller
+// owns the copy; x is untouched.
+func sortedCopy(x []float64) []float64 {
+	out := make([]float64, len(x))
+	for i, v := range x {
+		if math.IsNaN(v) {
+			return nil
+		}
+		out[i] = v
+	}
+	radixSortFloats(out)
+	return out
+}
+
+// radixSortFloats orders a slice of non-NaN floats in place, by radix over
+// their IEEE-754 bit patterns rather than by comparison.
+func radixSortFloats(s []float64) {
+	if len(s) < 2 {
+		return
+	}
+	keys := make([]uint64, len(s))
+	for i, v := range s {
+		keys[i] = sortableBits(v)
+	}
+	radixSortKeys(keys)
+	for i, k := range keys {
+		s[i] = unsortableBits(k)
+	}
+}
+
+// quantileOfSorted is the interpolation, given data already in order.
+func quantileOfSorted(s []float64, q float64) float64 {
+	if q < 0 || q > 1 || math.IsNaN(q) {
+		return math.NaN()
+	}
 	if len(s) == 1 {
 		return s[0]
 	}
@@ -264,11 +464,15 @@ func Describe(x []float64) Summary {
 	}
 	s.Mean = Mean(clean)
 	s.StdDev = StdDev(clean)
-	s.Min = Min(clean)
-	s.Q1 = Quantile(clean, 0.25)
-	s.Median = Median(clean)
-	s.Q3 = Quantile(clean, 0.75)
-	s.Max = Max(clean)
+	// One ordering for all five order statistics. DropNaN has already removed
+	// the NaNs, so sortedCopy cannot fail here, and the extremes are the ends
+	// of the sorted copy rather than two more passes over the column.
+	sorted := sortedCopy(clean)
+	s.Min = sorted[0]
+	s.Max = sorted[len(sorted)-1]
+	s.Q1 = quantileOfSorted(sorted, 0.25)
+	s.Median = quantileOfSorted(sorted, 0.5)
+	s.Q3 = quantileOfSorted(sorted, 0.75)
 	return s
 }
 
@@ -381,6 +585,55 @@ func sortableBits(v float64) uint64 {
 // least significant first. Passes whose byte is identical across every key are
 // skipped, which on real data — timestamps, prices, scores that share a high
 // byte — usually removes two or three of the eight.
+// unsortableBits is the inverse of sortableBits.
+func unsortableBits(b uint64) float64 {
+	if b&(1<<63) != 0 {
+		return math.Float64frombits(b &^ (1 << 63))
+	}
+	return math.Float64frombits(^b)
+}
+
+// radixSortKeys orders bit patterns with no payload to carry alongside. It is
+// the same eight-pass LSD radix as radixSort, without the index permutation,
+// because sorting a column does not need to know where each value came from.
+func radixSortKeys(keys []uint64) {
+	n := len(keys)
+	if n < 2 {
+		return
+	}
+	tmp := make([]uint64, n)
+	var count [256]int
+	for shift := uint(0); shift < 64; shift += 8 {
+		for i := range count {
+			count[i] = 0
+		}
+		for _, k := range keys {
+			count[(k>>shift)&0xFF]++
+		}
+		// A byte that is the same in every key cannot reorder anything, so the
+		// pass is skipped. For a column of ordinary magnitudes that is most of
+		// the high bytes, and skipping them is most of the speed.
+		if count[(keys[0]>>shift)&0xFF] == n {
+			continue
+		}
+		sum := 0
+		for i := range count {
+			c := count[i]
+			count[i] = sum
+			sum += c
+		}
+		for _, k := range keys {
+			b := (k >> shift) & 0xFF
+			tmp[count[b]] = k
+			count[b]++
+		}
+		// Copied back rather than swapped, as radixSort does: skipping a pass
+		// makes the number of passes odd, and a swap would then leave the
+		// result in the scratch slice instead of the caller's.
+		copy(keys, tmp)
+	}
+}
+
 func radixSort(keys []uint64, idx []int32) {
 	n := len(keys)
 	if n < 2 {
