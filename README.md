@@ -643,6 +643,23 @@ what removes them.
 **once**. If that function is a model inference or a metered API call, the
 difference is not nanoseconds — it is the bill, and the rate limit.
 
+The same thing, measured on the shape an event mesh actually has — 2,000
+events over 50 distinct objects, released in one burst, handler costing 2 ms:
+
+| Strategy | Handler ran | Wall |
+|---|---:|---:|
+| No deduplication | 2,000× | 5.03 ms |
+| **A mutex and a map** | **1,880×** | 5.93 ms |
+| `runi/memo` | **50×** | **3.18 ms** |
+
+A mutex and a map is a correct cache and it is what almost everyone writes. In
+a burst it removed **6%** of the redundant work, because every goroutine that
+arrives while the first is still working finds the map empty and starts again.
+`memo` hit the ideal exactly — one execution per object — and finished sooner
+*because* it did a fortieth of the work. For a Kubernetes controller, a webhook
+fan-in or a change feed, that ratio is the one that decides whether the handler
+keeps up.
+
 **3. Search with no model, no vector store, no GPU.** Ranking 5,000 documents
 takes 65 ms to index and 0.4 ms a query, in-process. The alternative is not
 `rank_bm25` being 1.4× slower; it is standing up an embedding service.

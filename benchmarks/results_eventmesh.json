@@ -1,0 +1,32 @@
+{
+  "go": "go1.27.2",
+  "handler_cost_ms": 2,
+  "ideal_executions": 50,
+  "results": [
+    {
+      "strategy": "no deduplication",
+      "events": 2000,
+      "distinct_keys": 50,
+      "handler_executions": 2000,
+      "wall_seconds": 0.00503363,
+      "per_event_us": 2.5168150000000002
+    },
+    {
+      "strategy": "mutex and a map",
+      "events": 2000,
+      "distinct_keys": 50,
+      "handler_executions": 1880,
+      "wall_seconds": 0.005925243,
+      "per_event_us": 2.9626215
+    },
+    {
+      "strategy": "runi/memo",
+      "events": 2000,
+      "distinct_keys": 50,
+      "handler_executions": 50,
+      "wall_seconds": 0.003183237,
+      "per_event_us": 1.5916184999999998
+    }
+  ],
+  "scenario": "one burst of events over a small set of objects, as a relist or a leader change produces"
+}
