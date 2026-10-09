@@ -1,20 +1,20 @@
 {
   "arch": "arm64",
   "avro_bytes": 740202,
-  "avro_read_s": 0.01447224,
+  "avro_read_s": 0.013403588,
   "avro_rows": 20000,
-  "avro_write_s": 0.001606557,
+  "avro_write_s": 0.001244566,
   "bm25_docs": 5000,
-  "bm25_index_s": 0.177891121,
+  "bm25_index_s": 0.071654144,
   "bm25_queries": 200,
-  "bm25_query_s": 0.084915442,
+  "bm25_query_s": 0.078282322,
   "go": "go1.27.2",
   "library": "runi",
   "pearson_n": 200000,
-  "pearson_s": 0.000678661,
-  "season_decompose_s": 0.020225629,
+  "pearson_s": 0.000681891,
+  "season_decompose_s": 0.018862289,
   "season_n": 4000,
-  "spearman_s": 0.243907184,
+  "spearman_s": 0.019730709,
   "trend_n": 100000,
-  "trend_s": 0.000154209
+  "trend_s": 0.00027181
 }

@@ -1,15 +1,15 @@
 {
   "library": "python functools.lru_cache",
-  "python": "3.14.7",
-  "hit_ns": 77.23498,
-  "miss_ns": 180.94568,
+  "python": "3.12.3",
+  "hit_ns": 36.55811,
+  "miss_ns": 82.48108,
   "stampede_8": {
-    "wall_seconds": 0.008309178985655308,
+    "wall_seconds": 0.008143610990373418,
     "function_ran_times": 8,
     "callers": 8
   },
   "stampede_64": {
-    "wall_seconds": 0.014929602039046586,
+    "wall_seconds": 0.01316689999657683,
     "function_ran_times": 64,
     "callers": 64
   },

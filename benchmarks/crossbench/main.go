@@ -105,7 +105,24 @@ func main() {
 	for i := range sdata {
 		sdata[i] = 100 + 0.05*float64(i) + 10*math.Sin(2*math.Pi*float64(i)/24) + r.NormFloat64()
 	}
-	res["season_decompose_s"] = timeIt(3, func() { _, _ = season.Decompose(sdata, season.Options{Period: 24}) })
+	// Like for like with statsmodels.seasonal_decompose: the period is GIVEN to
+	// both, and the trend-break search is OFF, because seasonal_decompose does
+	// not look for breaks. Comparing our default against it measured a
+	// different and larger job and reported the difference as a loss on this
+	// one, which flattered neither library.
+	res["season_decompose_s"] = timeIt(7, func() {
+		_, _ = season.Decompose(sdata, season.Options{Period: 24, MaxChangepoints: -1})
+	})
+	// What the extra work costs, reported separately rather than folded into
+	// the comparison above: the BIC-priced changepoint search, and then
+	// detecting the period as well instead of being told it.
+	res["season_decompose_with_breaks_s"] = timeIt(7, func() {
+		_, _ = season.Decompose(sdata, season.Options{Period: 24})
+	})
+	res["season_auto_s"] = timeIt(7, func() {
+		_, _ = season.Decompose(sdata, season.Options{})
+	})
+	res["season_period_detect_s"] = timeIt(7, func() { _ = season.Period(sdata, 0) })
 	res["season_n"] = len(sdata)
 
 	// ---- avro: encode + decode, against fastavro ----
