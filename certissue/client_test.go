@@ -171,7 +171,9 @@ func TestClientIssueFailures(t *testing.T) {
 			Issue: func(context.Context, []byte, time.Duration) ([]byte, [][]byte, error) { return nil, nil, errTransport },
 		}},
 		{"answer is not a certificate", Config{
-			Issue: func(context.Context, []byte, time.Duration) ([]byte, [][]byte, error) { return []byte("not DER"), nil, nil },
+			Issue: func(context.Context, []byte, time.Duration) ([]byte, [][]byte, error) {
+				return []byte("not DER"), nil, nil
+			},
 		}},
 		{"answer is for another key", Config{
 			Issue: func(context.Context, []byte, time.Duration) ([]byte, [][]byte, error) { return otherLeaf, nil, nil },

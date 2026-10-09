@@ -359,12 +359,9 @@ func TestIssuerFormatWithholdsTheKey(t *testing.T) {
 	ca := defaultCA(t)
 	iss := newIssuer(t, ca, allow(time.Hour, "api.example.test"), Options{})
 	secrets := []string{ca.key.D.String(), ca.key.D.Text(16), fmt.Sprintf("%x", ca.key.D.Bytes())}
-	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%T %v"} {
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s", "%q", "%x", "%X", "%d", "%10.3v"} {
 		for _, operand := range []interface{}{iss, *iss} {
 			out := fmt.Sprintf(verb, operand)
-			if verb == "%T %v" {
-				out = strings.TrimPrefix(strings.TrimPrefix(out, "*certissue.Issuer "), "certissue.Issuer ")
-			}
 			if out != "certissue.Issuer{key: withheld}" {
 				t.Errorf("%s of %T = %q", verb, operand, out)
 			}
