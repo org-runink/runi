@@ -113,6 +113,13 @@ func main() {
 	res["season_decompose_s"] = timeIt(7, func() {
 		_, _ = season.Decompose(sdata, season.Options{Period: 24, MaxChangepoints: -1})
 	})
+	// The classical moving-average decomposition: the same operation again,
+	// computed the way seasonal_decompose computes it. This is the row the
+	// comparison turns on, because it is like for like all the way down --
+	// same method, same output, to 1e-10 on the interior.
+	res["season_classical_s"] = timeIt(7, func() {
+		_, _ = season.Classical(sdata, 24)
+	})
 	// What the extra work costs, reported separately rather than folded into
 	// the comparison above: the BIC-priced changepoint search, and then
 	// detecting the period as well instead of being told it.

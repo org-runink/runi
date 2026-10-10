@@ -27,9 +27,9 @@ repetitions.
 
 | Operation | `runi` | Python | Faster by |
 |---|---|---|---|
-| ARIMAX fit, n=500 | **0.41 ms** | 15.06 ms — statsmodels | **37×** |
-| ARIMAX fit, n=2,000 | **1.77 ms** | 51.13 ms — statsmodels | **29×** |
-| ARIMAX fit, n=10,000 | **7.92 ms** | 260.3 ms — statsmodels | **33×** |
+| ARIMAX fit, n=500 | **1.35 ms** | 15.79 ms — statsmodels | **12×** |
+| ARIMAX fit, n=2,000 | **4.25 ms** | 53.79 ms — statsmodels | **13×** |
+| ARIMAX fit, n=10,000 | **18.31 ms** | 267.8 ms — statsmodels | **15×** |
 | OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33×** |
 | Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — fastavro | **8.9×** |
 | BM25 query ×200, 5,000 docs | **79.0 ms** | 648.5 ms — rank-bm25 | **8.2×** |
@@ -38,6 +38,7 @@ repetitions.
 | Spearman correlation, n=200,000 | **17.9 ms** | 34.0 ms — scipy | **1.9×** |
 | BM25 index build, 5,000 docs | **65.4 ms** | 91.2 ms — rank-bm25 | **1.4×** |
 | Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — fastavro | **1.1×** |
+| Seasonal decomposition, n=4,000 | **0.0408 ms** | 0.161 ms — statsmodels `seasonal_decompose` | **3.9×** |
 
 Spearman and the BM25 index were both losses when this page was first written —
 243.9 ms and 177.9 ms. `ranks` sorted through `sort.SliceStable`, paying for
@@ -51,28 +52,36 @@ language, which is why they are no longer in the table below.
 
 | Operation | `runi` | Python | Slower by | Why |
 |---|---|---|---|---|
-| Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — statsmodels | **9.5×** | `seasonal_decompose` is a centred moving average in C loops. Given the same period and with the break search off, `season.Decompose` fits a straight line and a Fourier series by least squares, which costs more and gives something a moving average cannot: a model that extrapolates. |
+| The same seasonal split by least squares, n=4,000 | 1.70 ms | **0.161 ms** — statsmodels | **10.6×** | `season.Decompose` fits a straight line and a Fourier series by least squares. It costs more than a moving average and gives something a moving average cannot: a model that extrapolates. `season.Classical` is the moving-average method, is in the table above, and is the row to compare against `seasonal_decompose`. |
 
-**This comparison is deliberately narrowed to make it fair.** Our default
-`Decompose` also runs a BIC-priced search for trend breaks, which
-`seasonal_decompose` does not do at all, so comparing the defaults measured a
-larger job and billed the difference to us as a loss on this one. The benchmark
-passes `MaxChangepoints: -1` for the row above and reports the rest separately:
+**This row took three goes to make honest.** First it compared our default
+`Decompose`, which also runs a BIC-priced search for trend breaks that
+`seasonal_decompose` does not do at all — a larger job, billed to us as a loss.
+Passing `MaxChangepoints: -1` made the *timing* like for like but not the
+*method*: a least-squares line plus a Fourier series is a different estimator
+from a centred moving average, with a different answer. `season.Classical` is
+now the moving-average method itself: 3.9× faster than `seasonal_decompose` and
+agreeing with it to **2e-13** on a series of magnitude 300, which is a few ulps
+of float64. Run `go run ./verify_classical && python verify_classical.py` to
+check that for yourself; it writes both sides' components and compares them on
+the interior, where a centred average is defined.
 
-| `season.Decompose`, n=4,000 | |
+| `season`, n=4,000, period given | |
 |---|---|
-| Period given, no break search — *what statsmodels does* | **1.74 ms** |
-| …plus the BIC changepoint search (our default) | 18.5 ms |
-| …plus detecting the period instead of being told it | 55.4 ms |
-| `season.Period` detection on its own | 4.32 ms |
+| `Classical` — *what statsmodels does, by its method* | **0.0408 ms** |
+| `Decompose`, no break search — least squares + Fourier | 1.70 ms |
+| …plus the BIC changepoint search (our default) | 18.4 ms |
+| …plus detecting the period instead of being told it | 56.0 ms |
+| `season.Period` detection on its own | 4.38 ms |
 
-The honest summary: statsmodels is faster at the decomposition. `season` is for
-the case where you do not already know the period or where the trend broke.
+The honest summary: use `Classical` when you know the period, and it is faster
+than statsmodels. `Decompose` is for the case where you do not already know the
+period or where the trend broke, and it costs what it costs.
 
 **On the absolutes.** The sub-millisecond rows move by up to ±40% between runs
 on this host — `trend` was seen between 0.154 and 0.273 ms, `Pearson` between
-0.75 and 1.09 ms — so treat the ratios as the result and the absolutes as
-context. Allocation counts, file sizes and every accuracy figure below are
+0.75 and 1.09 ms, `season.Classical` between 0.025 and 0.089 ms over fourteen
+runs — so treat the ratios as the result and the absolutes as context. Allocation counts, file sizes and every accuracy figure below are
 deterministic and repeat exactly.
 
 ## Accuracy, which matters more than speed
@@ -83,16 +92,29 @@ identical synthetic series, against statsmodels:
 | | `runi/arimax` | statsmodels |
 |---|---|---|
 | Prediction-interval coverage | **94.5%** | **94.5%** |
-| Forecast RMSE | 1.3169 | 1.3160 |
-| AR coefficient RMSE | 0.0508 | 0.0506 |
-| **Regression coefficient RMSE** | **0.0666** | **0.0336** |
+| Forecast RMSE | 1.31600 | 1.31601 |
+| AR coefficient RMSE | 0.05062 | 0.05062 |
+| **Regression coefficient RMSE** | **0.03364** | **0.03361** |
 
-Coverage is identical and forecasts differ by 0.07%. The β estimates are
-**twice as noisy**, and that is not a rounding difference: we fit by
-conditional sum of squares where statsmodels runs exact maximum likelihood
-through a Kalman filter. If you need the coefficients themselves — not the
-forecast — statsmodels is the better tool today. Closing that gap is the open
-work on `arimax`, and it is a bigger prize than any speed-up on this page.
+Coverage is identical, forecasts differ by 0.001%, and the regression
+coefficient — which used to be the one real loss on this page, at 0.0666
+against 0.0336 — is now 0.1% apart.
+
+**That row was closed, and the fix cost speed.** The old estimator was staged:
+one least-squares solve for β, then one ARMA fit to whatever was left, which
+estimates β as if the errors were independent. Unbiased, but inefficient, and
+with ARMA(1,1) errors at φ=0.6, θ=0.3 the inefficiency is a factor of four in
+variance — twice the standard error. `Fit` now alternates a prewhitened
+generalised-least-squares solve with a warm-started ARMA refit, descending on
+one conditional-sum-of-squares objective instead of fitting two blocks once
+each. Fitting got about 3× slower, out of a 37× margin, and the ARIMAX speed
+rows above moved with it.
+
+What remains different is the objective, not the precision: we minimise the
+conditional sum of squares, statsmodels the exact likelihood through a Kalman
+filter. At these series lengths that difference does not show up in any figure
+in this table. Where statsmodels is still the tool is breadth — SARIMA, state
+space models, diagnostics — not accuracy on this model.
 
 ## Event handling: the number that decides whether a handler keeps up
 
@@ -163,6 +185,10 @@ python benchmarks/bench_statsmodels.py
 go run ./benchmarks/crossbench      # bm25, stats, season, avro
 python benchmarks/baselines.py      # rank-bm25, scipy, statsmodels, fastavro
 python benchmarks/spark_bench.py    # SparkML, needs a JVM
+
+cd benchmarks                       # these two read each other's files
+go run ./verify_classical           # write both sides' seasonal components
+python verify_classical.py          # ...and check them against statsmodels
 ```
 
 Results land in `benchmarks/results_*.json`. Those files hold **one** run.

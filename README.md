@@ -51,7 +51,7 @@ go get github.com/org-runink/runi
 |---|---|---|
 | [`runi/stats`](#runistats--the-first-ten-minutes) | Describe, split and scale a column, and test whether a relationship is real | **100%** |
 | [`runi/arimax`](#runiarimax--forecasting-with-external-drivers) | Forecast a series using the things that drive it | **100%** |
-| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart | **100%** |
+| [`runi/season`](#runiseason--what-repeats-and-where-it-broke) | Find the season and the trend breaks, then split the series apart — fitted, or by moving average | **100%** |
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | **100%** |
@@ -134,9 +134,10 @@ usually the one that decides whether there is a second. Here is the map.
 `pd.read_sql`, and nothing in this module will ever train a neural network.
 
 **What you get:** a 6 MB static binary with no runtime and no dependency tree,
-fits that are [29–37× faster than statsmodels](#forecasting-head-to-head-with-statsmodels)
-at the same interval calibration, and real parallelism — `lazy.All` over five
-80 ms values finishes in 81 ms, not 400 ms, with no GIL to work around.
+fits that are [10–15× faster than statsmodels](#forecasting-head-to-head-with-statsmodels)
+at the same interval calibration *and the same coefficient precision*, and real
+parallelism — `lazy.All` over five 80 ms values finishes in 81 ms, not 400 ms,
+with no GIL to work around.
 
 **The honest recommendation:** explore in Python. Ship in Go. This module exists
 for the second half of that sentence — the moment a model has to run inside a
@@ -327,7 +328,7 @@ quietly assume zero or hold the last value flat and return a confident wrong
 answer. This returns an error.
 
 **Its intervals were measured, not just derived.** Nominal 95% prediction
-intervals covered **97.4%** of realised values over 1,800 held-out points.
+intervals covered **97.3%** of realised values over 1,800 held-out points.
 
 | | true | bias | RMSE |
 |---|---:|---:|---:|
@@ -348,7 +349,17 @@ p := season.Period(y, 0)               // 7 for weekly, 0 for "no season"
 breaks := season.Changepoints(y, 3)    // indices where the trend changed
 d, _ := season.Decompose(y, season.Options{})
 next := d.Forecast(14)                 // trend continued + season
+
+c, _ := season.Classical(y, 7)         // the moving-average split, period known
 ```
+
+**There are two decompositions, and the cheap one is usually the answer.**
+`Classical` is the textbook centred moving average — the operation
+`statsmodels.seasonal_decompose` performs, in one O(n) pass, 3.9× faster than
+it and agreeing with it to 2e-13. It detects no period, finds no breaks and
+makes no forecast; it is the function for "I know this is hourly data, split
+it". `Decompose` is the fitted version, and it is what answers the two
+questions above at the same time.
 
 **It says "no season" when there is none.** Scanning dozens of lags for a peak
 finds one in pure noise unless the bar is raised for the number of lags tried.
@@ -369,10 +380,22 @@ holidays, several seasonalities and a Bayesian treatment of changepoints. If you
 want Prophet, use Prophet. This is the classical additive decomposition
 underneath, with no dependencies.
 
+**The ends are stated, not smoothed over.** A centred average of `period`
+points does not exist for the first and last `period/2` points — there is no
+window. statsmodels returns NaN there; `Classical` holds the nearest real
+average instead, averages the season over the interior only so those held
+points cannot pull it, and puts the difference in the residual, so
+`trend + season + residual` still adds up to the series *at every index,
+including the ends*. A NaN in a component poisons the plot, the sum and the
+variance a caller takes from it; a held value with the error left visible does
+not.
+
 What it does not do: **one** seasonality only (the strongest wins); the trend is
 straight lines between breaks, fitted independently, so a forecast extends the
-last line; no prediction intervals. Short series are refused rather than
-guessed at: `Period` needs 8 points and two full cycles, `Decompose` needs 4.
+last line; no prediction intervals; `Classical` neither detects a period nor
+forecasts nor filters outliers, by design. Short series are refused rather than
+guessed at: `Period` needs 8 points and two full cycles, `Decompose` needs 4,
+`Classical` needs two full cycles of the period it is handed.
 
 ## `runi/avro` — Apache Avro without the dependency tree
 
@@ -629,9 +652,9 @@ not use this.
 Here is the honest case, which is four specific consequences. Each one names the
 number that drives it and what you would otherwise do instead.
 
-**1. A forecast can live inside the request.** `statsmodels` needs **705 ms to
-import** before it fits anything, and then **15.6 ms per fit**. `arimax` needs
-**0 ms** — it is compiled into your binary — and **0.531 ms**. That is not 30×
+**1. A forecast can live inside the request.** `statsmodels` needs **676 ms to
+import** before it fits anything, and then **16.3 ms per fit**. `arimax` needs
+**0 ms** — it is compiled into your binary — and **1.58 ms**. That is not 10×
 on a benchmark; it is the difference between a nightly batch that writes
 forecasts to a table and fitting a fresh model per tenant, per series, inside
 the handler that needs it. If you have ever built the batch job and the table
@@ -669,12 +692,13 @@ No transitive tree, no numpy ABI to pin, no supply chain to review, one static
 binary with no runtime. For some teams that is the entire decision and the
 speed is irrelevant.
 
-**And you should not use it when:** you need the regression coefficient itself
-rather than a forecast — statsmodels recovers β twice as precisely, and that is
-in the table below; you already know your seasonal period and want the
-classical decomposition — statsmodels is 9.5× faster at it; your data does not
-fit on one machine — that is what Spark is for; or you want an ecosystem, a
-notebook and a plotting library, which this will never have.
+**And you should not use it when:** you need SARIMA, state space models or
+exact maximum likelihood — `arimax` minimises the *conditional* sum of squares,
+and while that no longer costs it precision in β it is still not the same
+estimator; you want the seasonal split done by least squares rather than the
+classical moving average — that variant is 9.6× slower than statsmodels; your
+data does not fit on one machine — that is what Spark is for; or you want an
+ecosystem, a notebook and a plotting library, which this will never have.
 
 What the numbers below are actually for is proving those four claims are not
 marketing, and showing every case where we lose. The correctness evidence —
@@ -689,7 +713,8 @@ and wrong is worthless.
 One machine, one session, same inputs on both sides: an ASUS Ascent GX10
 (GB10), 20 cores, aarch64, Go 1.27.2, Python 3.12.3, with one core busy on
 unrelated work throughout. Each figure is the **median of five runs** for `runi`
-and three for Python, each of which is itself a median over repetitions.
+and three or more for Python, each of which is itself a median over
+repetitions.
 
 Reproduce it with `python benchmarks/baselines.py` and
 `go run ./benchmarks/crossbench`; the method is in
@@ -700,44 +725,59 @@ the whole reason the tables quote medians.
 
 | Operation | `runi` | The library people use | |
 |---|---:|---:|---|
-| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33× faster** |
-| Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — `fastavro` | **8.9× faster** |
-| BM25, 200 queries over 5,000 docs | **79.0 ms** | 648.5 ms — `rank_bm25` | **8.2× faster** |
+| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.99 ms — `scipy.stats.linregress` | **33× faster** |
+| Avro OCF write, 20,000 rows | **1.78 ms** | 15.07 ms — `fastavro` | **8.5× faster** |
+| BM25, 200 queries over 5,000 docs | **77.9 ms** | 617.1 ms — `rank_bm25` | **7.9× faster** |
+| Seasonal decomposition, n=4,000 | **0.042 ms** | 0.179 ms — `statsmodels` `seasonal_decompose` | **4.2× faster** |
+| Avro OCF read, 20,000 rows | **4.88 ms** | 16.35 ms — `fastavro` | **3.4× faster** |
 | Pearson, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8× faster** |
-| Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6× faster** |
-| Spearman, n=200,000 | **17.9 ms** | 34.0 ms — `scipy.stats.spearmanr` | **1.9× faster** |
-| Index 5,000 docs | **65.4 ms** | 91.2 ms — `rank_bm25` | **1.4× faster** |
-| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — `fastavro` | **1.1× faster** |
-| Seasonal decomposition, n=4,000 | 1.74 ms | **0.182 ms** — `statsmodels` | **9.5× slower** |
+| Spearman, n=200,000 | **17.2 ms** | 43.2 ms — `scipy.stats.spearmanr` | **2.5× faster** |
+| Index 5,000 docs | **70.4 ms** | 168.5 ms — `sklearn` `TfidfVectorizer` | **2.4× faster** |
+| Index 5,000 docs | **70.4 ms** | 91.8 ms — `rank_bm25` | **1.3× faster** |
+| …the same seasonal split by least squares instead, n=4,000 | 1.71 ms | **0.179 ms** — `statsmodels` | **9.6× slower** |
 
 The Avro file is also 740,202 bytes against fastavro's 741,181 — the same data,
 0.13% smaller, each readable by the other.
 
 **On the absolutes:** the sub-millisecond rows move by up to ±40% between runs
 on this host, so the ratios are the claim and the absolutes are context. `trend`
-was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms.
+was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms,
+and `season.Classical` — at 41 microseconds the smallest figure in the table —
+between 0.025 and 0.089 ms over fourteen runs, which is why the claim is the
+3.9× and not the 0.0408.
 Figures that *are* deterministic — allocation counts, file sizes, and every
 accuracy number below — are stated as facts.
 
-**The seasonal row is the one honest loss, and making it a fair fight took
-work.** `statsmodels.seasonal_decompose` is told the period and computes a
-centred moving average. Our default `Decompose` is told the period and *also*
-runs a BIC-priced search for trend breaks, which `seasonal_decompose` does not
-do at all — so comparing the two measured a larger job and reported the
-difference as our loss. The benchmark now disables the break search for the
-comparison, which is like for like, and reports the extra work separately:
+**The two seasonal rows are the same question asked twice, and getting them
+honest took three goes.** `statsmodels.seasonal_decompose` is told the period
+and computes a centred moving average. The first version of this table compared
+it against our default `Decompose`, which *also* runs a BIC-priced search for
+trend breaks — a larger job, reported as our loss. Turning the break search off
+made the timing fair but not the method: `Decompose` still fitted a line and a
+Fourier series by least squares, which is a different estimator with a
+different answer, and it lost by 9.5×. `season.Classical` is now the
+moving-average method itself, and it wins by 3.9× while agreeing with
+statsmodels to **2e-13** on a series of magnitude 300 — a few ulps of float64,
+verified over six series by
+[`benchmarks/verify_classical.py`](benchmarks/verify_classical.py). Same
+method, same numbers, one pass over the series.
 
-| `season.Decompose`, n=4,000 | |
+The least-squares route stays in the table as a loss, because it is one, and
+the extra work is priced separately rather than folded in:
+
+| `season`, n=4,000, period given | |
 |---|---:|
-| Period given, no break search — *the operation statsmodels performs* | **1.74 ms** |
-| …plus the BIC changepoint search (the default) | 18.5 ms |
-| …plus detecting the period instead of being told it | 55.4 ms |
-| `season.Period` detection on its own | 4.32 ms |
+| `Classical` — *the operation statsmodels performs, by its method* | **0.0408 ms** |
+| `Decompose`, no break search — least-squares trend + Fourier season | 1.70 ms |
+| …plus the BIC changepoint search (the default) | 18.4 ms |
+| …plus detecting the period instead of being told it | 56.0 ms |
+| `season.Period` detection on its own | 4.38 ms |
 
-So: if you know your period and want the classical decomposition, statsmodels
-is 9.5× faster and the right tool. What `season` offers is the three things the
-moving average cannot — it finds the period, it finds where the trend broke, and
-it extrapolates — and those cost what they cost.
+So: if you know your period and want the classical decomposition, use
+`Classical`, which is faster than statsmodels at it. What the least-squares
+route buys is the three things a moving average cannot do — it finds the
+period, it finds where the trend broke, and it extrapolates — and those cost
+what they cost.
 
 Two other rows used to go the wrong way, and fixing them is why they no longer
 do. `Spearman` was 243.9 ms because `ranks` sorted through `sort.SliceStable` —
@@ -751,50 +791,64 @@ Neither was a limit of the language.
 
 Time-series forecasting is Python's home ground, so the useful question is not
 whether Go can do it but what you give up. 200 independent synthetic series,
-AR(1) errors, one exogenous regressor, n=500, h=6, **both libraries reading the
-same CSVs written once by `benchmarks/gen.py`**.
+ARMA(1,1) errors, one exogenous regressor, n=500, h=6, **both libraries reading
+the same CSVs written once by `benchmarks/gen.py`**.
 
 The control is `naive_rmse`, the error of carrying the last value forward: it
-depends on the data and on neither library. It came out to
-**3.7104740961972245** on both sides, to every digit, which is how we know the
-two were fitted to identical numbers.
+depends on the data and on neither library. Go reports
+**3.7104740961972245** and Python **3.710474096197225** — the same `float64` to
+one unit in the last place, a relative difference of 1.2e-16 that comes from
+the order the two languages sum 200 values in. Nothing else in the run has that
+few digits between the sides, which is how we know the two were fitted to
+identical numbers.
 
 | | `runi/arimax` | `statsmodels` SARIMAX | |
 |---|---:|---:|---|
-| Fit, n=500 | **0.406 ms** | 15.06 ms | **37× faster** |
-| Fit, n=2,000 | **1.77 ms** | 51.13 ms | **29× faster** |
-| Fit, n=10,000 | **7.92 ms** | 260.3 ms | **33× faster** |
-| Per fit over the 200-trial run | **0.531 ms** | 15.61 ms | **29× faster** |
-| Start-up before the first fit | **0 ms** (compiled in) | 705 ms | |
+| Fit, n=500 | **1.35 ms** | 15.79 ms | **12× faster** |
+| Fit, n=2,000 | **4.25 ms** | 53.79 ms | **13× faster** |
+| Fit, n=10,000 | **18.31 ms** | 267.8 ms | **15× faster** |
+| Per fit over the 200-trial run | **1.58 ms** | 16.32 ms | **10× faster** |
+| Start-up before the first fit | **0 ms** (compiled in) | 676 ms | |
 | | | | |
 | 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
-| Forecast RMSE, h=6 | 1.31694 | 1.31601 | within **0.07%** |
+| Forecast RMSE, h=6 | 1.31600 | 1.31601 | within **0.001%** |
 | Forecast RMSE vs the naive control | **2.82× better** | 2.82× better | same skill |
-| φ (AR) bias / RMSE | −0.00419 / 0.05084 | −0.00407 / 0.05062 | indistinguishable |
-| β (exogenous) bias / RMSE | −0.00293 / 0.06662 | +0.00229 / **0.03361** | **statsmodels 2.0× better** |
-| Naive RMSE *(control — must match)* | 3.7104740961972245 | 3.7104740961972245 | ✅ |
+| φ (AR) bias / RMSE | −0.00410 / 0.05062 | −0.00407 / 0.05062 | indistinguishable |
+| β (exogenous) bias / RMSE | +0.00249 / **0.03364** | +0.00229 / **0.03361** | within **0.1%** |
+| Naive RMSE *(control — must match)* | 3.7104740961972245 | 3.710474096197225 | ✅ 1 ulp |
 
-**Read the β row before the speed rows.** statsmodels recovers the exogenous
-coefficient **twice as precisely**. That is not noise and not a bug — it is the
-price of the estimator. statsmodels runs exact maximum likelihood through a
-Kalman filter; `arimax` fits a staged regression with ARIMA errors by
-conditional sum of squares. The staged fit is what makes it ~30× faster, and it
-costs real precision in β.
+**The β row used to be the one to read first, and it is worth saying why it
+changed.** statsmodels recovered the exogenous coefficient twice as precisely —
+0.0336 against 0.0666 — and that was not noise. `arimax` fitted the model in
+*stages*: one least-squares solve for β, then one ARMA fit to whatever was left
+over. That estimates β as if the errors were independent, which is unbiased but
+inefficient, and with ARMA(1,1) errors at φ=0.6, θ=0.3 the inefficiency is a
+factor of four in variance — exactly the factor of two in RMSE that showed up
+in the table.
 
-What is genuinely equivalent is the part a decision turns on: the forecasts
-agree to 0.07% in six-step RMSE, both beat the naive control by the same 2.82×,
-and both deliver 94.5% empirical coverage against a nominal 95%. An interval
-claiming 95% and delivering 70% is worse than no interval, because it invites
-confident wrong answers.
+`Fit` now descends on a single objective instead. It alternates an exact
+generalised-least-squares solve for the coefficients on *prewhitened* data with
+a warm-started refit of the ARMA, until the coefficients stop moving — feasible
+GLS, which is Cochrane–Orcutt generalised from AR(1) errors to ARMA(p,q).
+Fitting became about 3× slower; β went from 0.06662 to 0.03364, against
+statsmodels' 0.03361. The speed rows above are the new ones.
+
+What still differs is the objective, not the precision. `arimax` minimises the
+**conditional** sum of squares, which conditions on the first p observations and
+on zero pre-sample shocks; statsmodels runs exact maximum likelihood through a
+Kalman filter. At these series lengths the difference does not appear in any
+figure in this table — forecasts agree to 0.001% in six-step RMSE, both beat the
+naive control by the same 2.82×, and both deliver 94.5% empirical coverage
+against a nominal 95%.
 
 | Use `statsmodels` when | Use `runi/arimax` when |
 |---|---|
-| You need the coefficient itself — it is the finding, as in econometrics | You need the forecast, and the coefficient is a means to it |
-| You want exact MLE, diagnostics, SARIMA, state space, a vast library | You want ARIMAX, fast, with calibrated intervals |
+| You need SARIMA, state space models, or its diagnostics | You need ARIMAX(p,d,q) with regressors, and that is the model |
+| You want exact MLE, and the initial conditions matter to you | Conditional least squares is enough, as it is at these lengths |
 | You are in a notebook and 0.7 s of import does not matter | You are in a service, fitting per request or per tenant |
 | You want the ecosystem Python has and Go does not | You want one static binary, no runtime, no dependency tree |
 
-A fit every 0.531 ms rather than every 15.6 ms is what changes architecture: not
+A fit every 1.58 ms rather than every 16.3 ms is what changes architecture: not
 a leaderboard position, but the difference between a nightly batch that writes
 forecasts to a table and **fitting a fresh model inside the request that needs
 it**, per tenant, per series, on demand.
@@ -853,7 +907,7 @@ with:
 
 ```bash
 go test -bench . -benchmem -benchtime=1s ./...
-go test -run 'TestParameterRecovery|TestIntervalCoverage|TestForecastBeatsNaive' -v ./arimax
+go test -run 'TestParameterRecovery|TestIntervalCoverage|TestForecastBeatsNaive|TestBetaPrecision' -v ./arimax
 ```
 
 ```
@@ -882,14 +936,23 @@ knowing the truth you are recovering.
 | AR(1) φ | 0.60 | −0.0079 | 0.0420 |
 
 β is recovered essentially unbiased (−0.02% of its value) *despite* strongly
-serially correlated errors — the purpose of the staged regression-with-ARIMA-errors
-fit. The small negative bias in φ is the known finite-sample bias of
-conditional-sum-of-squares estimation; it shrinks with n and is not corrected.
+serially correlated errors. The small negative bias in φ is the known
+finite-sample bias of conditional-sum-of-squares estimation; it shrinks with n
+and is not corrected.
+
+This particular case does **not** distinguish one estimator from another, and
+saying so is part of reporting it: the generator's x is a smooth sinusoid, so it
+is strongly autocorrelated, and against autocorrelated errors ordinary least
+squares is already nearly efficient — β's RMSE is 0.0087 both with the
+generalised-least-squares refinement in `Fit` and with it removed. The case that
+does distinguish them is independent x, where the staged estimator reaches
+0.0614 and `Fit` reaches **0.0329** (200 series, n=500, ARMA(1,1) errors at
+φ=0.6, θ=0.3; asymptotic theory says 0.0673 and 0.0325).
 
 | Measure | Result |
 |---|---|
-| **95% interval empirical coverage** | **97.4%** over 1,800 held-out points (h=1..6, 300 series) |
-| vs naive carry-forward, h=6 | **82.0% lower RMSE** (0.6188 vs 3.4424, 100 windows) |
+| **95% interval empirical coverage** | **97.3%** over 1,800 held-out points (h=1..6, 300 series) |
+| vs naive carry-forward, h=6 | **82.0% lower RMSE** (0.6187 vs 3.4424, 100 windows) |
 
 Coverage is the figure that matters when a forecast informs a decision. An
 interval claiming 95% and delivering 70% is worse than no interval, because it
@@ -905,18 +968,24 @@ in these intervals.
 
 | Benchmark | ns/op | B/op | allocs/op |
 |---|---:|---:|---:|
-| `Fit` ARIMAX(1,0,1)+1 regressor, n=100 | 126,268 | 148,001 | 321 |
-| `Fit` n=500 | 416,641 | 489,606 | 235 |
-| `Fit` n=2,000 | 1,650,162 | 2,033,969 | 246 |
-| `Fit` n=10,000 | 7,534,222 | 10,324,914 | 255 |
-| `Forecast` 24 steps | 20,541 | 72,071 | 10 |
-| `ACF` 40 lags, n=5,000 | 111,846 | 359 | **1** |
-| `olsQR` n=5,000, 9 columns | 640,912 | 409,710 | 11 |
+| `Fit` ARIMAX(1,0,1)+1 regressor, n=100 | 283,296 | 334,846 | 698 |
+| `Fit` n=500 | 896,873 | 1,052,894 | 486 |
+| `Fit` n=2,000 | 3,135,618 | 4,067,612 | 472 |
+| `Fit` n=10,000 | 16,285,489 | 21,223,045 | 505 |
+| `Forecast` 24 steps | 22,827 | 72,070 | 10 |
+| `ACF` 40 lags, n=5,000 | 112,244 | 359 | **1** |
+| `olsQR` n=5,000, 9 columns | 705,883 | 409,707 | 11 |
 
-`Fit` is linear in n — 20× the data for **18.1×** the time — and the allocation
+`Fit` is linear in n — 20× the data for **18.2×** the time — and the allocation
 count is flat from n=500 upward, because work per optimiser iteration does not
 depend on series length. Fit once, forecast often: forecasting 24 steps is
-~20 µs, and `ACF` over 5,000 points makes **one** allocation.
+~23 µs, and `ACF` over 5,000 points makes **one** allocation.
+
+`Fit` costs about 3× what it did when the fit was staged. It now alternates a
+prewhitened least-squares solve with a warm-started ARMA refit, up to four
+passes, instead of running each block once; that is what bought the β precision
+above, and it was paid out of the margin against `statsmodels`, not out of
+nothing.
 
 ### `runi/memo`
 
@@ -1022,7 +1091,7 @@ These hold for every generated input, not for the handful a table lists:
 | `chain` | **Every** single-bit flip, deletion and swap is caught and correctly blamed — not the five an example test lists; every prefix of a chain still verifies, so a reader racing an appender is not a false alarm |
 | `bm25` | Every score equals the per-term breakdown printed beside it; every hit shares a term with the query; padding a document can never raise its score; identical documents score identically |
 | `salvage` | Every truncation of a wrapped reply **fails closed**; `Scan`'s offsets always re-slice to the JSON it reported; its values never overlap; `DecodeOne` never partially fills a destination before refusing |
-| `season` | `trend + season + residual` **adds up** to the series it split, to the last bit; no component or forecast is ever NaN; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
+| `season` | `trend + season + residual` **adds up** to the series it split, to the last bit — for `Classical` including the two ends where the moving average does not exist; no component or forecast is ever NaN; a planted sine comes back with its amplitude at every period, which is what pins the even-period window's half weights; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
 | `stats` | Pearson stays in [−1, 1] and is symmetric; it is invariant under rescaling either input; Spearman depends only on order, which is what pins the radix ranking; ranks always sum to n(n+1)/2 |
 | `avro` | Every field type round-trips; `Long` at **all 64 varint boundaries**; doubles and floats **bit for bit**, including NaN and −0; a present empty string stays present; a truncated stream always errors |
 | `tablelog` | The table matches an independent model of its commits; a snapshot taken at an old version **never changes**; compaction preserves every visible row; prefix scans are exact; versions advance one commit at a time |

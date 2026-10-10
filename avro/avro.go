@@ -36,7 +36,6 @@
 package avro
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/binary"
 	"errors"
@@ -141,36 +140,154 @@ func (e *Encoder) Float64Matrix(m [][]float64) {
 	e.Long(0)
 }
 
-// Decoder reads Avro binary primitives from a buffered reader.
-type Decoder struct{ r *bufio.Reader }
+// Decoder reads Avro binary primitives out of a window of bytes, refilling the
+// window from an io.Reader when it runs dry.
+//
+// The window is the point. Decoding a value is a bounds check and an index into
+// a []byte, not a ReadByte or a ReadFull through an io.Reader: an indirect call
+// per value, plus — for every fixed-width type — a local array that escapes to
+// the heap because it is passed as an interface argument. That overhead, not
+// the arithmetic, is what made reading a container cost ten times what writing
+// one did. A Decoder over bytes already in memory does no I/O at all.
+type Decoder struct {
+	buf []byte    // the window; buf[pos:] is unread
+	pos int       // read offset into buf
+	src io.Reader // refills the window; nil once there are no more bytes, ever
+}
+
+const (
+	// minWindow is the smallest window a Decoder refilling from a reader grows
+	// to, and so the smallest read it makes of that reader.
+	minWindow = 8192
+	// maxVarintLen is the most bytes a 64-bit varint can occupy.
+	maxVarintLen = 10
+	// maxEmptyReads bounds a source that keeps returning (0, nil): io.Reader
+	// permits it, and a decoder that believed it would spin forever. bufio
+	// made this promise for us before the window did.
+	maxEmptyReads = 100
+)
+
+var errVarintOverflow = errors.New("avro: varint overflow")
 
 // NewDecoder wraps r.
-func NewDecoder(r io.Reader) *Decoder {
-	if br, ok := r.(*bufio.Reader); ok {
-		return &Decoder{r: br}
+func NewDecoder(r io.Reader) *Decoder { return &Decoder{src: r} }
+
+// newWindowDecoder decodes bytes that are already in memory. It does not copy
+// them and never reads from anywhere, so the slice must not be written to
+// while the Decoder is in use — and the values handed back must not alias it,
+// because the caller is free to reuse the backing array afterwards.
+func newWindowDecoder(b []byte) *Decoder { return &Decoder{buf: b} }
+
+// fill makes n unread bytes available at buf[pos:]. Callers invoke it only
+// when fewer than n are there.
+//
+// It grows the window geometrically rather than straight to n, because n is
+// often a length taken verbatim from the input: a corrupt length must not be
+// able to demand its own allocation before one byte of it has been read.
+func (d *Decoder) fill(n int64) error {
+	if d.pos > 0 { // drop what has been consumed, keeping the rest
+		d.buf = d.buf[:copy(d.buf, d.buf[d.pos:])]
+		d.pos = 0
 	}
-	return &Decoder{r: bufio.NewReader(r)}
+	empty := 0
+	for int64(len(d.buf)) < n {
+		if d.src == nil {
+			return d.shortErr()
+		}
+		if len(d.buf) == cap(d.buf) {
+			size := 2 * cap(d.buf)
+			if size < minWindow {
+				size = minWindow
+			}
+			grown := make([]byte, len(d.buf), size)
+			copy(grown, d.buf)
+			d.buf = grown
+		}
+		m, err := d.src.Read(d.buf[len(d.buf):cap(d.buf)])
+		d.buf = d.buf[:len(d.buf)+m]
+		if err == io.EOF {
+			d.src = nil // there will be no more bytes; the loop decides what that means
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		if m == 0 {
+			empty++
+			if empty == maxEmptyReads {
+				return io.ErrNoProgress
+			}
+		}
+	}
+	return nil
+}
+
+// shortErr tells a clean end of input from a value cut in half. Input that
+// stops exactly on a value boundary is io.EOF, which ReadOCF reads as the end
+// of a container; input that stops inside a value is a truncation, which is
+// never a clean end of anything.
+func (d *Decoder) shortErr() error {
+	if d.pos == len(d.buf) {
+		return io.EOF
+	}
+	return io.ErrUnexpectedEOF
+}
+
+// raw returns the next n bytes as a window into the Decoder's own buffer. It is
+// valid only until the next read from this Decoder, so anything kept must be
+// copied. n is an int64 because it can come from the input: comparing it as an
+// int64 is what stops a huge length from wrapping round into a valid-looking
+// slice bound.
+func (d *Decoder) raw(n int64) ([]byte, error) {
+	if n > int64(len(d.buf)-d.pos) {
+		if err := d.fill(n); err != nil {
+			return nil, err
+		}
+	}
+	b := d.buf[d.pos : d.pos+int(n)]
+	d.pos += int(n)
+	return b, nil
 }
 
 // Long reads a zig-zag varint.
 func (d *Decoder) Long() (int64, error) {
-	var u uint64
-	var shift uint
-	for {
-		b, err := d.r.ReadByte()
-		if err != nil {
-			return 0, err
+	// With a whole varint's worth of window in hand, no byte needs its own
+	// availability check -- which is the common case inside a data block.
+	if buf := d.buf[d.pos:]; len(buf) >= maxVarintLen {
+		var u uint64
+		for i := 0; i < maxVarintLen; i++ {
+			b := buf[i]
+			u |= uint64(b&0x7f) << (7 * i)
+			if b&0x80 == 0 {
+				d.pos += i + 1
+				return int64(u>>1) ^ -int64(u&1), nil
+			}
 		}
+		return 0, errVarintOverflow
+	}
+	return d.longSlow()
+}
+
+// longSlow reads a varint that may straddle the end of the window. It starts
+// again from pos, which Long has not moved.
+func (d *Decoder) longSlow() (int64, error) {
+	var u uint64
+	for shift := uint(0); ; shift += 7 {
+		if d.pos == len(d.buf) {
+			if err := d.fill(1); err != nil {
+				return 0, err
+			}
+		}
+		b := d.buf[d.pos]
+		d.pos++
 		u |= uint64(b&0x7f) << shift
 		if b&0x80 == 0 {
-			break
+			return int64(u>>1) ^ -int64(u&1), nil
 		}
-		shift += 7
-		if shift >= 64 {
-			return 0, errors.New("avro: varint overflow")
+		if shift >= 57 { // a further 7 bits would run past 64
+			return 0, errVarintOverflow
 		}
 	}
-	return int64(u>>1) ^ -int64(u&1), nil
 }
 
 // Int reads an Avro int.
@@ -181,12 +298,19 @@ func (d *Decoder) Int() (int32, error) {
 
 // Bool reads a single 0/1 byte.
 func (d *Decoder) Bool() (bool, error) {
-	b, err := d.r.ReadByte()
-	return b != 0, err
+	if d.pos == len(d.buf) {
+		if err := d.fill(1); err != nil {
+			return false, err
+		}
+	}
+	b := d.buf[d.pos]
+	d.pos++
+	return b != 0, nil
 }
 
-// Blob reads a length-prefixed byte slice.
-func (d *Decoder) Blob() ([]byte, error) {
+// span reads a length-prefixed byte run and returns it as a window into the
+// Decoder's buffer — see raw for how long that stays valid.
+func (d *Decoder) span() ([]byte, error) {
 	n, err := d.Long()
 	if err != nil {
 		return nil, err
@@ -194,40 +318,54 @@ func (d *Decoder) Blob() ([]byte, error) {
 	if n < 0 {
 		return nil, fmt.Errorf("avro: negative length %d", n)
 	}
-	// Read through a LimitReader rather than make([]byte, n): n comes from the
-	// input, and a corrupt length must not allocate more than the bytes present.
-	b, err := io.ReadAll(io.LimitReader(d.r, n))
+	return d.raw(n)
+}
+
+// Blob reads a length-prefixed byte slice. The result is a copy: the Decoder's
+// window is reused, and a blob that aliased it would change under its owner.
+func (d *Decoder) Blob() ([]byte, error) {
+	b, err := d.span()
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(b)) != n {
-		return nil, io.ErrUnexpectedEOF
-	}
-	return b, nil
+	out := make([]byte, len(b))
+	copy(out, b)
+	return out, nil
 }
 
-// String reads a length-prefixed UTF-8 string.
+// String reads a length-prefixed UTF-8 string. The conversion copies, which is
+// the one allocation per string this package is willing to make: a string
+// handed out over the window would be rewritten by the next record read.
 func (d *Decoder) String() (string, error) {
-	b, err := d.Blob()
-	return string(b), err
+	b, err := d.span()
+	if err != nil {
+		return "", err
+	}
+	return string(b), nil
 }
 
 // Double reads an 8-byte little-endian double.
 func (d *Decoder) Double() (float64, error) {
-	var b [8]byte
-	if _, err := io.ReadFull(d.r, b[:]); err != nil {
-		return 0, err
+	if d.pos+8 > len(d.buf) {
+		if err := d.fill(8); err != nil {
+			return 0, err
+		}
 	}
-	return math.Float64frombits(binary.LittleEndian.Uint64(b[:])), nil
+	v := binary.LittleEndian.Uint64(d.buf[d.pos:])
+	d.pos += 8
+	return math.Float64frombits(v), nil
 }
 
 // Float reads a 4-byte little-endian float.
 func (d *Decoder) Float() (float32, error) {
-	var b [4]byte
-	if _, err := io.ReadFull(d.r, b[:]); err != nil {
-		return 0, err
+	if d.pos+4 > len(d.buf) {
+		if err := d.fill(4); err != nil {
+			return 0, err
+		}
 	}
-	return math.Float32frombits(binary.LittleEndian.Uint32(b[:])), nil
+	v := binary.LittleEndian.Uint32(d.buf[d.pos:])
+	d.pos += 4
+	return math.Float32frombits(v), nil
 }
 
 // OptionalString decodes a union {null, string}. present=false means null.
@@ -260,12 +398,34 @@ func (d *Decoder) Float64Array() ([]float64, error) {
 				return nil, err
 			}
 		}
-		for i := int64(0); i < count; i++ {
-			x, err := d.Double()
-			if err != nil {
-				return nil, err
+		// Decode as much of the block as the window holds, in one pass with one
+		// growth of out, then refill and go round again. count came from the
+		// input, so out is never sized to it -- only to doubles that are
+		// demonstrably present.
+		for count > 0 {
+			ready := int64(len(d.buf)-d.pos) / 8
+			if ready == 0 {
+				if err := d.fill(8); err != nil {
+					return nil, err
+				}
+				ready = int64(len(d.buf)-d.pos) / 8
 			}
-			out = append(out, x)
+			n := count
+			if n > ready {
+				n = ready
+			}
+			if int64(cap(out)-len(out)) < n {
+				grown := make([]float64, len(out), len(out)+int(n))
+				copy(grown, out)
+				out = grown
+			}
+			p := d.pos
+			for i := int64(0); i < n; i++ {
+				out = append(out, math.Float64frombits(binary.LittleEndian.Uint64(d.buf[p:])))
+				p += 8
+			}
+			d.pos = p
+			count -= n
 		}
 	}
 }
