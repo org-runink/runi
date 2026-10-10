@@ -374,9 +374,23 @@ func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
 }
 
 // At returns the seasonal effect at time t, excluding Mean.
+//
+// t is taken modulo the period first. That is what a season MEANS, so it
+// changes no answer mathematically, but it does change the arithmetic: the
+// angle handed to Cos and Sin is now under 2π·harmonics instead of growing
+// with t, and a sine of a large angle is not as accurate as a sine of a small
+// one. By t=4,000 on a 24-point cycle the angle is past a thousand radians,
+// where one ulp of the angle is already 2e-13 of a radian and the rounding in
+// forming it has nowhere to hide. Reducing first makes At agree with the
+// basis FitFourier actually fitted — which is tabulated per phase, and so has
+// always used the small angle — rather than drifting from it down the series.
 func (f Fourier) At(t int) float64 {
 	if f.Period < 2 {
 		return 0
+	}
+	t %= f.Period
+	if t < 0 {
+		t += f.Period // Go's % keeps the sign of the dividend; a phase has none
 	}
 	v := 0.0
 	for k := range f.A {
@@ -553,8 +567,16 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	}
 	// Breaks are looked for in the deseasonalised series.
 	deseason := make([]float64, n)
-	for t := range y {
-		deseason[t] = y[t] - seasonAt(four, t)
+	cyc := seasonCycle(four)
+	if cyc == nil {
+		copy(deseason, y)
+	} else {
+		for t, ph := 0, 0; t < n; t++ {
+			deseason[t] = y[t] - cyc[ph]
+			if ph++; ph == len(cyc) {
+				ph = 0
+			}
+		}
 	}
 	if opt.MaxChangepoints > 0 {
 		d.Changepoints = Changepoints(deseason, opt.MaxChangepoints)
@@ -568,13 +590,43 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 		}
 	}
 	d.Period, d.season = period, four
-	for t := range y {
+	cyc = seasonCycle(four)
+	mean := four.Mean
+	for t, ph := 0, 0; t < n; t++ {
+		se := 0.0
+		if cyc != nil {
+			se = cyc[ph]
+			if ph++; ph == len(cyc) {
+				ph = 0
+			}
+		}
 		// The season's mean belongs to the level, not the season.
-		d.Trend[t] = trend[t] + four.Mean
-		d.Seasonal[t] = seasonAt(four, t)
-		d.Residual[t] = y[t] - d.Trend[t] - d.Seasonal[t]
+		tr := trend[t] + mean
+		d.Trend[t] = tr
+		d.Seasonal[t] = se
+		d.Residual[t] = y[t] - tr - se
 	}
 	return d, nil
+}
+
+// seasonCycle evaluates one full cycle of the season, or nil when there is no
+// season to evaluate.
+//
+// At depends only on t mod Period, so one cycle IS the whole function: over a
+// series it becomes a lookup instead of two transcendental calls per harmonic
+// per point. For the 4,000-point daily series the decomposition benchmark
+// measures, with three harmonics and the season evaluated twice, that is 288
+// calls to Sin and Cos in place of 48,000. The values are taken from At
+// itself, so the table cannot drift from the function it stands for.
+func seasonCycle(f Fourier) []float64 {
+	if f.Period < 2 || len(f.A) == 0 {
+		return nil
+	}
+	c := make([]float64, f.Period)
+	for ph := range c {
+		c[ph] = f.At(ph)
+	}
+	return c
 }
 
 // Forecast extends the decomposition h steps past the end of the series: the
@@ -924,21 +976,117 @@ func noiseSigma(y []float64) float64 {
 	for i := 1; i < len(y); i++ {
 		d[i-1] = y[i] - y[i-1]
 	}
-	med := median(d)
+	// medianIn reorders d, which costs nothing here and saves two copies of
+	// the whole series: the next step rewrites every element from its own
+	// value, and the step after takes another median. Neither cares what
+	// order the differences are in.
+	med := medianIn(d)
 	for i := range d {
 		d[i] = math.Abs(d[i] - med)
 	}
-	return median(d) / 0.6744897501960817 / math.Sqrt2
+	return medianIn(d) / 0.6744897501960817 / math.Sqrt2
 }
 
 func median(v []float64) float64 {
-	s := append([]float64(nil), v...)
-	sort.Float64s(s)
-	n := len(s)
-	if n%2 == 1 {
-		return s[n/2]
+	return medianIn(append([]float64(nil), v...))
+}
+
+// medianIn is the median of v, REORDERING v to find it. It returns exactly
+// what sorting v and taking the middle returns — the same element, not an
+// approximation of it — but it finds that element by selection instead, which
+// only ever partitions the side the answer is on and so is linear in the
+// length of v where a sort is n·log n. For the 4,000-point series Decompose
+// takes two of these per outlier filter, and an outlier filter per pass, the
+// sorts were over half of the whole decomposition.
+//
+// NaN is handled the way sort.Float64s handles it, because that is what this
+// replaces: cmp.Less puts NaN below every number, so a median by sorting finds
+// the NaNs at the front. They are moved there first and the selection runs on
+// the numbers that are left.
+func medianIn(v []float64) float64 {
+	n := len(v)
+	nan := 0
+	for i := range v {
+		if math.IsNaN(v[i]) {
+			v[i], v[nan] = v[nan], v[i]
+			nan++
+		}
 	}
-	return (s[n/2-1] + s[n/2]) / 2
+	num := v[nan:]
+	k := n / 2
+	if n%2 == 1 {
+		if k < nan {
+			return v[k]
+		}
+		selectKth(num, k-nan)
+		return num[k-nan]
+	}
+	// An even length takes the mean of the two middle elements. Selecting the
+	// lower one leaves everything greater than it to its right, so the upper
+	// one is the smallest of that right-hand part — a scan, not a second
+	// selection.
+	switch {
+	case k < nan: // both middles are NaN
+		return (v[k-1] + v[k]) / 2
+	case k-1 < nan: // the lower middle is the last NaN, the upper the least number
+		selectKth(num, 0)
+		return (v[k-1] + num[0]) / 2
+	}
+	j := k - 1 - nan
+	selectKth(num, j)
+	up := num[j+1]
+	for _, x := range num[j+2:] {
+		if x < up {
+			up = x
+		}
+	}
+	return (num[j] + up) / 2
+}
+
+// selectKth partitions v around its k-th smallest element, leaving that
+// element at v[k], everything no greater than it before, and everything no
+// less than it after. v must hold no NaN: the comparisons below assume a
+// total order, which NaN does not have.
+//
+// Quickselect with a median-of-three pivot, so that an already sorted or
+// reversed series — which is exactly what a run of differences from a clean
+// trend looks like — does not take the quadratic path.
+func selectKth(v []float64, k int) {
+	lo, hi := 0, len(v)-1
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if v[mid] < v[lo] {
+			v[mid], v[lo] = v[lo], v[mid]
+		}
+		if v[hi] < v[mid] {
+			v[hi], v[mid] = v[mid], v[hi]
+			if v[mid] < v[lo] {
+				v[mid], v[lo] = v[lo], v[mid]
+			}
+		}
+		p := v[mid]
+		i, j := lo, hi
+		for i <= j {
+			for v[i] < p {
+				i++
+			}
+			for v[j] > p {
+				j--
+			}
+			if i <= j {
+				v[i], v[j] = v[j], v[i]
+				i++
+				j--
+			}
+		}
+		if k <= j {
+			hi = j
+		} else if k >= i {
+			lo = i
+		} else {
+			return // k landed between the two parts, so v[k] is already its own
+		}
+	}
 }
 
 func sumSq(v []float64) float64 {
@@ -1097,14 +1245,23 @@ func hampel(v []float64) []float64 {
 	// copy of the window for every point — eight thousand allocations for a
 	// 4,000-point series, since this runs twice — and at seven elements an
 	// insertion sort beats anything cleverer.
+	// The insertion carries its element in a register and SHIFTS the ones it
+	// passes, rather than swapping its way down. The element being moved is
+	// the same value either way, so every comparison is made against the same
+	// pair and the order that comes out is the same order — NaN, which sorts
+	// nowhere in particular under a bare <, included. What changes is that a
+	// shift writes one element where a swap writes two, and this inner loop
+	// was two fifths of the whole decomposition.
 	var win [2*hampelHalf + 1]float64
 	for i := range v {
 		lo := min(max(i-hampelHalf, 0), n-width)
 		copy(win[:], v[lo:lo+width])
 		for a := 1; a < width; a++ {
-			for b := a; b > 0 && win[b] < win[b-1]; b-- {
-				win[b], win[b-1] = win[b-1], win[b]
+			x, b := win[a], a
+			for ; b > 0 && x < win[b-1]; b-- {
+				win[b] = win[b-1]
 			}
+			win[b] = x
 		}
 		if med := win[width/2]; math.Abs(v[i]-med) > limit {
 			out[i] = med
