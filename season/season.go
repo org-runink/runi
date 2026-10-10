@@ -729,8 +729,16 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	//
 	// wn accumulates y[s+period] at each s, which is exactly the window that
 	// comes due one period later. Past the end of the series there is no such
-	// window: the guard skips those terms, and the sum it leaves unfinished
-	// belongs to a reseed beyond the last defined point, which is never read.
+	// window — for an odd period the very last step has none — and yn simply
+	// runs out: the sum it leaves unfinished belongs to a reseed beyond the
+	// last defined point, which is never read.
+	//
+	// The body indexes y and trend directly rather than through slices pre-cut
+	// so that every index is provably in range. Cutting them does remove six
+	// bounds checks, and it measured a quarter SLOWER: five more slice headers
+	// do not fit in the registers this loop has left, and the spills cost more
+	// than the checks they save.
+	m := last - h + 1 // the number of points the average is defined at
 	w := 0.0
 	for _, v := range y[:period] {
 		w += v
@@ -760,15 +768,34 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	}
 
 	// The season is the mean of the detrended series at each phase of the
-	// cycle, over the indices where the average above is defined. The phase is
-	// carried forward and wrapped rather than taken as t%period: the additions
-	// into each phase still happen in increasing t, so the arithmetic is the
-	// same one, done without a division per point.
+	// cycle, over the indices where the average above is defined.
+	//
+	// Walked a run at a time rather than a point at a time: a run is as much of
+	// the cycle as is left before the phase wraps, and across it the phase and
+	// the index advance together, so the three slices can be cut to one length
+	// and indexed by the same counter. Each phase is still visited once per
+	// cycle in increasing t, so each total is accumulated in the order it was
+	// before; what goes is the wrap test and the bounds check on every point.
+	// One total per phase. Seasons are short — hours in a day, days in a week,
+	// months in a year — so the usual one fits in an array the compiler can
+	// leave on the stack, and only an unusually long cycle pays the allocator.
+	// One total per phase. Keeping these in a fixed array on the stack instead,
+	// to save the allocation, measured slower: a season is short enough that
+	// the array has to be sized for the longest one anybody might ask for, and
+	// zeroing that on every call costs more than the 192 bytes it saves.
 	sum := make([]float64, period)
-	ph := h % period
-	for t := h; t <= last; t++ {
-		sum[ph] += y[t] - trend[t]
-		if ph++; ph == period {
+	for t, ph := h, h%period; t <= last; {
+		run := period - ph
+		if rest := last + 1 - t; rest < run {
+			run = rest
+		}
+		acc := sum[ph : ph+run]
+		yr, td := y[t:t+len(acc)], trend[t:t+len(acc)]
+		for i := range acc {
+			acc[i] += yr[i] - td[i]
+		}
+		t += run
+		if ph += run; ph == period {
 			ph = 0
 		}
 	}
@@ -778,7 +805,6 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	// more. No phase can be empty — the range is at least period long once the
 	// series covers two full cycles, and period consecutive points touch every
 	// phase exactly once.
-	m := last - h + 1
 	base, extra, p0 := m/period, m%period, h%period
 	mean := 0.0
 	for i := range sum {

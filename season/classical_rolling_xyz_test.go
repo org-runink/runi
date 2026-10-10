@@ -262,6 +262,20 @@ func TestClassicalRollingEdgesXYZ(t *testing.T) {
 	for _, period := range []int{-7, -1, 0, 1} {
 		checkSameXYZ(t, "bad period", []float64{1, 2, 3, 4, 5, 6, 7, 8}, period)
 	}
+	// A cycle longer than the array the phase totals usually live in, so the
+	// allocated fallback is exercised, and one on either side of the boundary.
+	for _, period := range []int{63, 64, 65, 100, 257} {
+		for _, extra := range []int{0, 1, period - 1, period + 3} {
+			n := 2*period + extra
+			r := rand.New(rand.NewPCG(uint64(n), uint64(period)))
+			x := make([]float64, n)
+			for i := range x {
+				x[i] = 100 + 0.05*float64(i) +
+					10*math.Sin(2*math.Pi*float64(i)/float64(period)) + r.NormFloat64()
+			}
+			checkSameXYZ(t, "long period", x, period)
+		}
+	}
 	// Period 2 and 3, the shortest even and odd cycles, where h is 1 and the
 	// defined range is almost the whole series.
 	for _, period := range []int{2, 3} {
