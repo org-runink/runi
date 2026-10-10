@@ -823,3 +823,63 @@ func TestRankKeyOrdersValuesSPRK(t *testing.T) {
 		}
 	}
 }
+
+// Values that agree in sign, exponent and the first twenty bits of mantissa
+// are the case the first sort leaves undecided: they land in one run, in the
+// order they arrived, and the run has to be settled on the bits the sort did
+// not look at. Short runs are insertion sorted and long ones go through a
+// second radix pass, so both sizes are driven here, in the worst order
+// (descending) and with ties mixed in.
+func TestSpearmanClusteredKeyPrefixSPRK(t *testing.T) {
+	base := math.Float64bits(1.0) // low 32 bits all zero, so +k stays in prefix
+	for _, m := range []int{2, 3, 24, 25, 100, 5000} {
+		for _, name := range []string{"descending", "with ties", "shuffled"} {
+			x := make([]float64, m)
+			r := rand.New(rand.NewSource(int64(m)))
+			for i := range x {
+				switch name {
+				case "descending":
+					x[i] = math.Float64frombits(base + uint64(m-i))
+				case "with ties":
+					x[i] = math.Float64frombits(base + uint64((m-i)/3))
+				default:
+					x[i] = math.Float64frombits(base + uint64(r.Intn(m)))
+				}
+			}
+			got, want := ranksSPRK(x), ranksRefSPRK(x)
+			for i := range want {
+				if got[i] != want[i] {
+					t.Fatalf("m=%d %s: rank[%d] = %v, want %v", m, name, i, got[i], want[i])
+				}
+			}
+			// A whole column inside one 32-bit prefix is the shape that makes
+			// the run as long as the data; confirm it really is one.
+			if name == "descending" {
+				k0 := rankKey(x[0]) >> 32
+				for _, v := range x {
+					if rankKey(v)>>32 != k0 {
+						t.Fatalf("m=%d: the column is not inside one key prefix, so this test proves nothing", m)
+					}
+				}
+			}
+			if m < 3 {
+				continue
+			}
+			y := make([]float64, m)
+			for i := range y {
+				y[i] = float64(i)
+			}
+			s, err := Spearman(x, y)
+			if err != nil {
+				t.Fatal(err)
+			}
+			ref, err := spearmanRefSPRK(x, y)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if math.Abs(s-ref) > 1e-12 {
+				t.Fatalf("m=%d %s: Spearman = %v, want %v", m, name, s, ref)
+			}
+		}
+	}
+}

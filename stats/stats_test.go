@@ -280,12 +280,12 @@ func TestRadixSortDegenerateLengths(t *testing.T) {
 			x[i] = 42
 		}
 		w := getRankWork(n)
-		keys, idx := w.sortByValue(x) // must not panic
-		if len(keys) != n || len(idx) != n {
-			t.Fatalf("n=%d: got %d keys and %d indices", n, len(keys), len(idx))
+		skeys, packed := w.sortByValue(x) // must not panic
+		if len(skeys) != n || len(packed) != n {
+			t.Fatalf("n=%d: got %d keys and %d positions", n, len(skeys), len(packed))
 		}
-		if n == 1 && (keys[0] != rankKey(42) || idx[0] != 0) {
-			t.Errorf("n=1: keys=%v idx=%v", keys, idx)
+		if n == 1 && (skeys[0] != rankKey(42) || uint32(packed[0]) != 0) {
+			t.Errorf("n=1: skeys=%v packed=%v", skeys, packed)
 		}
 		putRankWork(w)
 	}
