@@ -87,6 +87,11 @@ type Options struct {
 	// index silently stops matching anything.
 	Tokenise func(string) []string
 
+	// simple records that Tokenise was not supplied and SimpleTokenise was
+	// filled in, so New can take the allocation-free path and still honour a
+	// custom tokeniser exactly when one was given.
+	simple bool
+
 	// Stopwords are ignored entirely, in documents and queries alike. Nil means
 	// none are. BM25 already discounts common words through IDF, so a stopword
 	// list is usually unnecessary and occasionally harmful ("The Who").
@@ -166,6 +171,7 @@ func New(docs []Document, opts Options) *Index {
 	}
 	if opts.Tokenise == nil {
 		opts.Tokenise = SimpleTokenise
+		opts.simple = true
 	}
 
 	ix := &Index{
@@ -182,10 +188,12 @@ func New(docs []Document, opts Options) *Index {
 	// of the vocabulary.
 	var tf []int32
 	var seen []int32
+	var scratch []string
 	total := 0
 	for i, d := range docs {
 		ix.docIDs[i] = d.ID
-		terms := ix.terms(d.Text)
+		terms := ix.termsInto(scratch, d.Text)
+		scratch = terms[:0]
 		ix.lengths[i] = len(terms)
 		total += len(terms)
 
@@ -214,6 +222,96 @@ func New(docs []Document, opts Options) *Index {
 		ix.avgLen = float64(total) / float64(len(docs))
 	}
 	return ix
+}
+
+// appendTokens is SimpleTokenise writing into a caller-supplied slice, for the
+// ASCII text that nearly all indexed documents are. It reports false and
+// touches nothing when it meets a byte outside ASCII, so the caller falls back
+// to SimpleTokenise and the two can never disagree about unicode.
+//
+// Splitting before lowercasing is safe HERE and only here: over ASCII,
+// lowercasing maps A-Z to a-z and changes nothing about which bytes are
+// letters or digits, so the token boundaries are identical either way. That is
+// not true in general, which is why anything non-ASCII goes the long way.
+//
+// It exists because tokenising was about 70% of the time to build an index:
+// strings.ToLower scanned every document and strings.FieldsFunc called a
+// closure once per rune.
+func appendTokens(dst []string, s string) ([]string, bool) {
+	start := -1
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 0x80 {
+			return dst, false
+		}
+		if isWordByte(c) {
+			if start < 0 {
+				start = i
+			}
+			continue
+		}
+		if start >= 0 {
+			dst = append(dst, lowerASCII(s[start:i]))
+			start = -1
+		}
+	}
+	if start >= 0 {
+		dst = append(dst, lowerASCII(s[start:]))
+	}
+	return dst, true
+}
+
+func isWordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9'
+}
+
+// lowerASCII returns s lowered, and returns s itself when there is nothing to
+// lower -- which is the common case and costs no allocation.
+func lowerASCII(s string) string {
+	hasUpper := false
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c >= 'A' && c <= 'Z' {
+			hasUpper = true
+			break
+		}
+	}
+	if !hasUpper {
+		return s
+	}
+	b := make([]byte, len(s))
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if c >= 'A' && c <= 'Z' {
+			c += 'a' - 'A'
+		}
+		b[i] = c
+	}
+	return string(b)
+}
+
+// termsInto is terms() reusing the caller's slice across documents. The tokens
+// are substrings of the document text, so keeping them after the slice is
+// reused is still safe: a string does not alias the slice that carried it.
+func (ix *Index) termsInto(dst []string, text string) []string {
+	var toks []string
+	if ix.opts.simple {
+		var ok bool
+		if toks, ok = appendTokens(dst[:0], text); !ok {
+			toks = SimpleTokenise(text)
+		}
+	} else {
+		toks = ix.opts.Tokenise(text)
+	}
+	if len(ix.opts.Stopwords) == 0 {
+		return toks
+	}
+	out := toks[:0]
+	for _, t := range toks {
+		if _, stop := ix.opts.Stopwords[t]; !stop {
+			out = append(out, t)
+		}
+	}
+	return out
 }
 
 func (ix *Index) terms(text string) []string {
