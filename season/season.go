@@ -58,24 +58,24 @@
 //
 // Classical computes what statsmodels.tsa.seasonal.seasonal_decompose
 // computes, by the same method, and it is FASTER: n=4,000 at period 24 takes
-// 0.0408 ms here against 0.161 ms there, 3.9x faster, with the two agreeing to
+// 0.0213 ms here against 0.1815 ms there, 8.5x faster, with the two agreeing to
 // 2e-13 on a series of magnitude 300 — a few ulps of float64, which is to say
 // they produce the same numbers. That is the like-for-like row, and it is the
 // one to quote.
 //
-// Decompose is SLOWER than seasonal_decompose, and that stays said. Given the
-// same period and with the trend-break search off, n=4,000 takes 1.70 ms here
-// against 0.161 ms there, because it solves two least-squares systems where a
-// moving average takes two additions a point. It is the wrong tool for a
-// decomposition whose period you already know — that is what Classical is for
-// — and the right one for the three things a moving average cannot do at all.
-// Each piece costs what it costs:
+// Decompose used to be 5x SLOWER than seasonal_decompose. It is now slightly
+// faster — 0.155 ms against 0.1815 ms with the same period and the trend-break
+// search off — but it is still doing a different and larger job, solving two
+// least-squares systems where a moving average takes two additions a point. It
+// is the wrong tool for a decomposition whose period you already know — that is
+// what Classical is for — and the right one for the three things a moving
+// average cannot do at all. Each piece costs what it costs:
 //
-//	Classical, period given             0.0408 ms
-//	Decompose, period given, no breaks  1.70 ms
-//	plus the BIC changepoint search     18.4 ms   (the default)
-//	plus detecting the period too       56.0 ms
-//	Period detection on its own         4.38 ms
+//	Classical, period given             0.0213 ms
+//	Decompose, period given, no breaks  0.155 ms
+//	plus the BIC changepoint search     16.9 ms   (the default)
+//	plus detecting the period too       53.5 ms
+//	Period detection on its own         3.54 ms
 //
 // So: a moving average cannot tell you the period, cannot tell you where the
 // trend broke, and cannot extrapolate. Those three are what the extra time
@@ -117,7 +117,7 @@ var ErrTooShort = errors.New("season: series too short")
 // its neighbours by seasonal fit, which settles off-by-one peaks. maxPeriod
 // caps the search; 0 means half the series. NaN values are forward-filled.
 func Period(x []float64, maxPeriod int) int {
-	x = fill(x)
+	x = fillAlias(x)
 	n := len(x)
 	if n < MinPeriodLength {
 		return 0
@@ -266,7 +266,7 @@ type Fourier struct {
 // capped at period/2, the most a period can carry. NaN values are
 // forward-filled.
 func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
-	x = fill(x)
+	x = fillAlias(x)
 	if period < 2 {
 		return Fourier{}, errors.New("season: period must be at least 2")
 	}
@@ -374,9 +374,23 @@ func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
 }
 
 // At returns the seasonal effect at time t, excluding Mean.
+//
+// t is taken modulo the period first. That is what a season MEANS, so it
+// changes no answer mathematically, but it does change the arithmetic: the
+// angle handed to Cos and Sin is now under 2π·harmonics instead of growing
+// with t, and a sine of a large angle is not as accurate as a sine of a small
+// one. By t=4,000 on a 24-point cycle the angle is past a thousand radians,
+// where one ulp of the angle is already 2e-13 of a radian and the rounding in
+// forming it has nowhere to hide. Reducing first makes At agree with the
+// basis FitFourier actually fitted — which is tabulated per phase, and so has
+// always used the small angle — rather than drifting from it down the series.
 func (f Fourier) At(t int) float64 {
 	if f.Period < 2 {
 		return 0
+	}
+	t %= f.Period
+	if t < 0 {
+		t += f.Period // Go's % keeps the sign of the dividend; a phase has none
 	}
 	v := 0.0
 	for k := range f.A {
@@ -406,7 +420,7 @@ func (f Fourier) Amplitude(k int) float64 {
 // line looks like an improvement, and breaks are invented in smooth data.
 // Segments are at least minSegment points long. NaN values are forward-filled.
 func Changepoints(x []float64, maxK int) []int {
-	x = fill(x)
+	x = fillAlias(x)
 	n := len(x)
 	if n < 2*minSegment || maxK < 1 {
 		return nil
@@ -512,7 +526,7 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	if allNaN(x) {
 		return nil, errors.New("season: series has no values")
 	}
-	y := fill(x)
+	y := fillAlias(x)
 	n := len(y)
 	if opt.Harmonics <= 0 {
 		opt.Harmonics = 3
@@ -553,8 +567,16 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	}
 	// Breaks are looked for in the deseasonalised series.
 	deseason := make([]float64, n)
-	for t := range y {
-		deseason[t] = y[t] - seasonAt(four, t)
+	cyc := seasonCycle(four)
+	if cyc == nil {
+		copy(deseason, y)
+	} else {
+		for t, ph := 0, 0; t < n; t++ {
+			deseason[t] = y[t] - cyc[ph]
+			if ph++; ph == len(cyc) {
+				ph = 0
+			}
+		}
 	}
 	if opt.MaxChangepoints > 0 {
 		d.Changepoints = Changepoints(deseason, opt.MaxChangepoints)
@@ -568,13 +590,43 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 		}
 	}
 	d.Period, d.season = period, four
-	for t := range y {
+	cyc = seasonCycle(four)
+	mean := four.Mean
+	for t, ph := 0, 0; t < n; t++ {
+		se := 0.0
+		if cyc != nil {
+			se = cyc[ph]
+			if ph++; ph == len(cyc) {
+				ph = 0
+			}
+		}
 		// The season's mean belongs to the level, not the season.
-		d.Trend[t] = trend[t] + four.Mean
-		d.Seasonal[t] = seasonAt(four, t)
-		d.Residual[t] = y[t] - d.Trend[t] - d.Seasonal[t]
+		tr := trend[t] + mean
+		d.Trend[t] = tr
+		d.Seasonal[t] = se
+		d.Residual[t] = y[t] - tr - se
 	}
 	return d, nil
+}
+
+// seasonCycle evaluates one full cycle of the season, or nil when there is no
+// season to evaluate.
+//
+// At depends only on t mod Period, so one cycle IS the whole function: over a
+// series it becomes a lookup instead of two transcendental calls per harmonic
+// per point. For the 4,000-point daily series the decomposition benchmark
+// measures, with three harmonics and the season evaluated twice, that is 288
+// calls to Sin and Cos in place of 48,000. The values are taken from At
+// itself, so the table cannot drift from the function it stands for.
+func seasonCycle(f Fourier) []float64 {
+	if f.Period < 2 || len(f.A) == 0 {
+		return nil
+	}
+	c := make([]float64, f.Period)
+	for ph := range c {
+		c[ph] = f.At(ph)
+	}
+	return c
 }
 
 // Forecast extends the decomposition h steps past the end of the series: the
@@ -610,7 +662,7 @@ func (d *Decomposition) Forecast(h int) []float64 {
 //
 // It is O(n) — a running window sum, then one pass to average by phase — where
 // Decompose solves two least-squares systems: n=4,000 at period 24 takes
-// 0.0408 ms against Decompose's 1.70 ms for the same arguments, and 0.161 ms
+// 0.0213 ms against Decompose's 0.155 ms for the same arguments, and 0.1815 ms
 // for seasonal_decompose. It is the fast path when the period is already known.
 //
 // What it does NOT do, and what Decompose is for:
@@ -659,18 +711,50 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	if len(x) < 2*period {
 		return nil, ErrTooShort
 	}
-	if allNaN(x) {
+	// Nothing below WRITES to y, so when the series holds no NaN — which is the
+	// ordinary case — y can be the caller's own slice and the copy fill() would
+	// make is pure waste. Deciding that takes two scans with one test each
+	// rather than one scan with two, because a loop the processor can predict
+	// and a loop it cannot are not the same loop: the first stops at the first
+	// real value, which is index 0 unless the series opens with a gap, and the
+	// second only asks whether a NaN appears anywhere after it.
+	first := -1
+	for i, v := range x {
+		if !math.IsNaN(v) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
 		return nil, errors.New("season: series has no values")
 	}
-	y := fill(x)
+	y := x
+	if first > 0 {
+		y = fill(x) // leading NaNs: the fill is needed whatever follows
+	} else {
+		for _, v := range x {
+			if math.IsNaN(v) {
+				y = fill(x)
+				break
+			}
+		}
+	}
 	n := len(y)
 	// h is both the half-width of the window and the number of undefined
 	// points at each end: period/2 for an even period, (period−1)/2 for an
 	// odd one, which integer division gives for both.
 	h := period / 2
 	even := period%2 == 0
+	last := n - 1 - h // the last index the centred average is defined at
 
-	trend := make([]float64, n)
+	// The three components are one allocation, sliced three ways. They are
+	// always all three returned and always exactly n long, so three trips
+	// through the allocator buy nothing; each is capped at its own length so
+	// that a caller's append reallocates instead of writing into its
+	// neighbour.
+	buf := make([]float64, 3*n)
+	trend, seas, resid := buf[0:n:n], buf[n:2*n:2*n], buf[2*n:3*n:3*n]
+
 	// The window for index t is the period points y[t−h : t−h+period], plus
 	// the extra half-weighted point y[t+h] when the period is even. Carrying
 	// its sum forward costs two operations per point instead of period, which
@@ -681,22 +765,49 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	// keeps the rounding error of every addition it ever made, and that error
 	// grows with n while the window's own magnitude does not: on a long series
 	// of large values the drift would eventually show up in the trend, and it
-	// would show up as a slow wander that looks like signal.
+	// would show up as a slow wander that looks like signal. cd counts down to
+	// the next reseed, which is the same schedule as testing s%period but
+	// without a division per point.
+	//
+	// The reseed is not taken as a loop when it falls due, but built a term at
+	// a time across the period points before it, in wn. It is the same period
+	// additions of the same period values in the same order, so the sum is the
+	// same sum down to the bit; what changes is that they no longer sit in one
+	// chain with the running window's own additions. Both are chains of adds
+	// whose every step waits on the one before, and a processor can only run a
+	// chain at one step per add latency however little else it has to do. Two
+	// independent chains it can run at once, so spreading the reseed out costs
+	// the same arithmetic and about half the time.
+	//
+	// wn accumulates y[s+period] at each s, which is exactly the window that
+	// comes due one period later. Past the end of the series there is no such
+	// window — for an odd period the very last step has none — and yn simply
+	// runs out: the sum it leaves unfinished belongs to a reseed beyond the
+	// last defined point, which is never read.
+	//
+	// The body indexes y and trend directly rather than through slices pre-cut
+	// so that every index is provably in range. Cutting them does remove six
+	// bounds checks, and it measured a quarter SLOWER: five more slice headers
+	// do not fit in the registers this loop has left, and the spills cost more
+	// than the checks they save.
+	m := last - h + 1 // the number of points the average is defined at
 	w := 0.0
 	for _, v := range y[:period] {
 		w += v
 	}
-	for t := h; t <= n-1-h; t++ {
+	wn, cd := 0.0, period
+	fp := float64(period)
+	for t := h; t <= last; t++ {
 		s := t - h
 		if s > 0 {
-			if s%period == 0 {
-				w = 0
-				for _, v := range y[s : s+period] {
-					w += v
-				}
+			if cd--; cd == 0 {
+				w, wn, cd = wn, 0, period
 			} else {
 				w += y[s+period-1] - y[s-1]
 			}
+		}
+		if s+period < n {
+			wn += y[s+period]
 		}
 		v := w
 		if even {
@@ -705,24 +816,59 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 			// to halve the one it does.
 			v += 0.5 * (y[t+h] - y[t-h])
 		}
-		trend[t] = v / float64(period)
+		trend[t] = v / fp
 	}
 
 	// The season is the mean of the detrended series at each phase of the
 	// cycle, over the indices where the average above is defined.
+	//
+	// Walked a run at a time rather than a point at a time: a run is as much of
+	// the cycle as is left before the phase wraps, and across it the phase and
+	// the index advance together, so the three slices can be cut to one length
+	// and indexed by the same counter. Each phase is still visited once per
+	// cycle in increasing t, so each total is accumulated in the order it was
+	// before; what goes is the wrap test and the bounds check on every point.
+	// One total per phase. Seasons are short — hours in a day, days in a week,
+	// months in a year — so the usual one fits in an array the compiler can
+	// leave on the stack, and only an unusually long cycle pays the allocator.
+	// One total per phase. Keeping these in a fixed array on the stack instead,
+	// to save the allocation, measured slower: a season is short enough that
+	// the array has to be sized for the longest one anybody might ask for, and
+	// zeroing that on every call costs more than the 192 bytes it saves.
 	sum := make([]float64, period)
-	cnt := make([]int, period)
-	for t := h; t <= n-1-h; t++ {
-		ph := t % period
-		sum[ph] += y[t] - trend[t]
-		cnt[ph]++
+	for t, ph := h, h%period; t <= last; {
+		run := period - ph
+		if rest := last + 1 - t; rest < run {
+			run = rest
+		}
+		acc := sum[ph : ph+run]
+		yr, td := y[t:t+len(acc)], trend[t:t+len(acc)]
+		for i := range acc {
+			acc[i] += yr[i] - td[i]
+		}
+		t += run
+		if ph += run; ph == period {
+			ph = 0
+		}
 	}
-	// No phase can be empty: the defined range is n−2h points, which is at
-	// least period long once the series covers two full cycles, and period
-	// consecutive points touch every phase exactly once.
+	// How many points each phase got is arithmetic, not something to count: the
+	// defined range is the m points from h to last, so every phase gets m/period
+	// of them and the first m%period phases STARTING AT h's own phase get one
+	// more. No phase can be empty — the range is at least period long once the
+	// series covers two full cycles, and period consecutive points touch every
+	// phase exactly once.
+	base, extra, p0 := m/period, m%period, h%period
 	mean := 0.0
 	for i := range sum {
-		sum[i] /= float64(cnt[i])
+		cnt := base
+		if d := i - p0; d < 0 {
+			if d+period < extra {
+				cnt++
+			}
+		} else if d < extra {
+			cnt++
+		}
+		sum[i] /= float64(cnt)
 		mean += sum[i]
 	}
 	mean /= float64(period)
@@ -738,22 +884,33 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 		trend[t] = trend[h]
 	}
 	for t := n - h; t < n; t++ {
-		trend[t] = trend[n-1-h]
+		trend[t] = trend[last]
 	}
 
-	d := &Decomposition{
+	// The seasonal component is the one cycle repeated, so it is laid down by
+	// copying rather than by indexing a phase per point: one period, then
+	// double the filled region until the series is covered.
+	copy(seas, sum)
+	for f := period; f < n; f *= 2 {
+		copy(seas[f:], seas[:f])
+	}
+	// And the residual is what the two of them leave, in the same order the
+	// phase-indexed form subtracted it: (y − trend) − season. All four slices
+	// are cut to one length so that the compiler can see they are the same
+	// length and drop the bounds check on each of them.
+	ss := seas[:n]
+	ys, ts, rs := y[:len(ss)], trend[:len(ss)], resid[:len(ss)]
+	for t, se := range ss {
+		rs[t] = ys[t] - ts[t] - se
+	}
+
+	return &Decomposition{
 		Period:   period,
 		Trend:    trend,
-		Seasonal: make([]float64, n),
-		Residual: make([]float64, n),
+		Seasonal: seas,
+		Residual: resid,
 		n:        n,
-	}
-	for t := range y {
-		se := sum[t%period]
-		d.Seasonal[t] = se
-		d.Residual[t] = y[t] - trend[t] - se
-	}
-	return d, nil
+	}, nil
 }
 
 func seasonAt(f Fourier, t int) float64 { return f.At(t) }
@@ -819,21 +976,117 @@ func noiseSigma(y []float64) float64 {
 	for i := 1; i < len(y); i++ {
 		d[i-1] = y[i] - y[i-1]
 	}
-	med := median(d)
+	// medianIn reorders d, which costs nothing here and saves two copies of
+	// the whole series: the next step rewrites every element from its own
+	// value, and the step after takes another median. Neither cares what
+	// order the differences are in.
+	med := medianIn(d)
 	for i := range d {
 		d[i] = math.Abs(d[i] - med)
 	}
-	return median(d) / 0.6744897501960817 / math.Sqrt2
+	return medianIn(d) / 0.6744897501960817 / math.Sqrt2
 }
 
 func median(v []float64) float64 {
-	s := append([]float64(nil), v...)
-	sort.Float64s(s)
-	n := len(s)
-	if n%2 == 1 {
-		return s[n/2]
+	return medianIn(append([]float64(nil), v...))
+}
+
+// medianIn is the median of v, REORDERING v to find it. It returns exactly
+// what sorting v and taking the middle returns — the same element, not an
+// approximation of it — but it finds that element by selection instead, which
+// only ever partitions the side the answer is on and so is linear in the
+// length of v where a sort is n·log n. For the 4,000-point series Decompose
+// takes two of these per outlier filter, and an outlier filter per pass, the
+// sorts were over half of the whole decomposition.
+//
+// NaN is handled the way sort.Float64s handles it, because that is what this
+// replaces: cmp.Less puts NaN below every number, so a median by sorting finds
+// the NaNs at the front. They are moved there first and the selection runs on
+// the numbers that are left.
+func medianIn(v []float64) float64 {
+	n := len(v)
+	nan := 0
+	for i := range v {
+		if math.IsNaN(v[i]) {
+			v[i], v[nan] = v[nan], v[i]
+			nan++
+		}
 	}
-	return (s[n/2-1] + s[n/2]) / 2
+	num := v[nan:]
+	k := n / 2
+	if n%2 == 1 {
+		if k < nan {
+			return v[k]
+		}
+		selectKth(num, k-nan)
+		return num[k-nan]
+	}
+	// An even length takes the mean of the two middle elements. Selecting the
+	// lower one leaves everything greater than it to its right, so the upper
+	// one is the smallest of that right-hand part — a scan, not a second
+	// selection.
+	switch {
+	case k < nan: // both middles are NaN
+		return (v[k-1] + v[k]) / 2
+	case k-1 < nan: // the lower middle is the last NaN, the upper the least number
+		selectKth(num, 0)
+		return (v[k-1] + num[0]) / 2
+	}
+	j := k - 1 - nan
+	selectKth(num, j)
+	up := num[j+1]
+	for _, x := range num[j+2:] {
+		if x < up {
+			up = x
+		}
+	}
+	return (num[j] + up) / 2
+}
+
+// selectKth partitions v around its k-th smallest element, leaving that
+// element at v[k], everything no greater than it before, and everything no
+// less than it after. v must hold no NaN: the comparisons below assume a
+// total order, which NaN does not have.
+//
+// Quickselect with a median-of-three pivot, so that an already sorted or
+// reversed series — which is exactly what a run of differences from a clean
+// trend looks like — does not take the quadratic path.
+func selectKth(v []float64, k int) {
+	lo, hi := 0, len(v)-1
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if v[mid] < v[lo] {
+			v[mid], v[lo] = v[lo], v[mid]
+		}
+		if v[hi] < v[mid] {
+			v[hi], v[mid] = v[mid], v[hi]
+			if v[mid] < v[lo] {
+				v[mid], v[lo] = v[lo], v[mid]
+			}
+		}
+		p := v[mid]
+		i, j := lo, hi
+		for i <= j {
+			for v[i] < p {
+				i++
+			}
+			for v[j] > p {
+				j--
+			}
+			if i <= j {
+				v[i], v[j] = v[j], v[i]
+				i++
+				j--
+			}
+		}
+		if k <= j {
+			hi = j
+		} else if k >= i {
+			lo = i
+		} else {
+			return // k landed between the two parts, so v[k] is already its own
+		}
+	}
 }
 
 func sumSq(v []float64) float64 {
@@ -850,6 +1103,20 @@ func sub(a, b []float64) []float64 {
 		out[i] = a[i] - b[i]
 	}
 	return out
+}
+
+// fillAlias is fill for a series that has something to fill, and x itself for
+// one that has not. A series with no NaN in it is its own forward-fill, so the
+// copy fill would make is a copy of nothing — and these are whole-series
+// copies on a path that takes several of them. What comes back must be treated
+// as read-only, since it may be the caller's own slice.
+func fillAlias(x []float64) []float64 {
+	for _, v := range x {
+		if math.IsNaN(v) {
+			return fill(x)
+		}
+	}
+	return x
 }
 
 // fill forward-fills NaN; leading NaNs take the first real value. A series of
@@ -992,14 +1259,65 @@ func hampel(v []float64) []float64 {
 	// copy of the window for every point — eight thousand allocations for a
 	// 4,000-point series, since this runs twice — and at seven elements an
 	// insertion sort beats anything cleverer.
+	// The insertion carries its element in a register and SHIFTS the ones it
+	// passes, rather than swapping its way down. The element being moved is
+	// the same value either way, so every comparison is made against the same
+	// pair and the order that comes out is the same order — NaN, which sorts
+	// nowhere in particular under a bare <, included. What changes is that a
+	// shift writes one element where a swap writes two, and this inner loop
+	// was two fifths of the whole decomposition.
 	var win [2*hampelHalf + 1]float64
+	half := width / 2
+	clean := true
+	for _, w := range v {
+		if w != w { // NaN, which the shortcut below cannot reason about
+			clean = false
+			break
+		}
+	}
 	for i := range v {
 		lo := min(max(i-hampelHalf, 0), n-width)
-		copy(win[:], v[lo:lo+width])
-		for a := 1; a < width; a++ {
-			for b := a; b > 0 && win[b] < win[b-1]; b-- {
-				win[b], win[b-1] = win[b-1], win[b]
+		band := v[lo : lo+width]
+		// Most points are not outliers, and for most points the window does
+		// not have to be ordered to prove it. The median is the (half+1)-th
+		// smallest of the window, so it can only fall below v[i]−limit if at
+		// least half+1 of the window does, and only above v[i]+limit if at
+		// least half+1 of the window does. Counting those two is one pass with
+		// no ordering, and when neither reaches half+1 the median is inside
+		// the band, the test cannot fire, and the answer is v[i] — which is
+		// exactly what the sort would have concluded, so this is a proof and
+		// not a guess. On a clean 4,000-point series it settles every point.
+		//
+		// NaN is the one value the argument does not hold for, because it
+		// orders below nothing and above nothing and the insertion sort below
+		// puts it wherever it falls. One anywhere in the series turns the
+		// shortcut off for all of it — asked once, up front, rather than per
+		// window, so that the common case counts two things per point and not
+		// three.
+		vi := v[i]
+		if clean {
+			loEdge, hiEdge := vi-limit, vi+limit
+			below, above := 0, 0
+			for _, w := range band {
+				if w < loEdge {
+					below++
+				}
+				if w > hiEdge {
+					above++
+				}
 			}
+			if below <= half && above <= half {
+				out[i] = vi
+				continue
+			}
+		}
+		copy(win[:], band)
+		for a := 1; a < width; a++ {
+			x, b := win[a], a
+			for ; b > 0 && x < win[b-1]; b-- {
+				win[b] = win[b-1]
+			}
+			win[b] = x
 		}
 		if med := win[width/2]; math.Abs(v[i]-med) > limit {
 			out[i] = med

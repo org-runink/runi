@@ -20,14 +20,31 @@ import (
 // saves tokens. Anything else is written as a dash list. Map keys are sorted,
 // so the output of the same value is always the same bytes.
 func Encode(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", fmt.Errorf("toon: %w", err)
+	// A document that is ALREADY maps, slices and scalars is written straight
+	// out. The round trip below exists to honour struct tags, omitempty and
+	// custom marshalers by letting encoding/json decide the shape -- but when
+	// the caller hands over a generic tree there is nothing left for it to
+	// decide, and marshalling the whole document to JSON only to parse it back
+	// was costing more than writing the TOON. On a 2,000-row table that was
+	// about 70% of Encode's time and 12x the cost of json.Marshal itself.
+	doc, direct := genericTree(v)
+	if !direct {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", fmt.Errorf("toon: %w", err)
+		}
+		doc, err = jsonToValue(b)
+		if err != nil {
+			return "", fmt.Errorf("toon: %w", err)
+		}
 	}
-	doc, err := jsonToValue(b)
-	if err != nil {
-		return "", fmt.Errorf("toon: %w", err)
-	}
+	return encodeGeneric(doc)
+}
+
+// encodeGeneric writes an already-generic document. Encode reaches it by two
+// routes -- directly, or after the marshal-and-reparse -- and both must
+// produce the same bytes; TestPropertyFastPathMatchesTheRoundTrip checks that.
+func encodeGeneric(doc any) (string, error) {
 	if err := checkEncodable(doc, false); err != nil {
 		return "", err
 	}
@@ -70,6 +87,38 @@ func checkEncodable(v any, inList bool) error {
 	return nil
 }
 
+// genericTree reports whether v is already a tree of the kinds TOON writes, so
+// the marshal-and-reparse round trip can be skipped. It allocates nothing: it
+// walks the value and answers.
+//
+// Anything else -- a struct, a named map type, a typed slice -- goes the long
+// way, because only encoding/json knows what its tags mean.
+func genericTree(v any) (any, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, e := range t {
+			if _, ok := genericTree(e); !ok {
+				return nil, false
+			}
+		}
+		return t, true
+	case []any:
+		for _, e := range t {
+			if _, ok := genericTree(e); !ok {
+				return nil, false
+			}
+		}
+		return t, true
+	case nil, bool, string, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return v, true
+	default:
+		return nil, false
+	}
+}
+
 func writeValue(sb *strings.Builder, v any, depth int) error {
 	switch t := v.(type) {
 	case map[string]any:
@@ -109,6 +158,96 @@ func writeField(sb *strings.Builder, key string, v any, depth int) {
 	}
 }
 
+// writeInt appends a number without allocating.
+//
+// The digits are formed by hand rather than with strconv.AppendInt, because
+// passing the scratch slice to AppendInt makes the array escape to the heap --
+// one allocation per number, which on a table of 2,000 rows with two numeric
+// columns is 4,000 of them. Ranging over the array and writing bytes keeps it
+// on the stack.
+func writeInt(sb *strings.Builder, v int64) {
+	if v == 0 {
+		sb.WriteByte('0')
+		return
+	}
+	neg := v < 0
+	u := uint64(v)
+	if neg {
+		u = uint64(-v)
+	}
+	var buf [20]byte
+	i := len(buf)
+	for u > 0 {
+		i--
+		buf[i] = byte('0' + u%10)
+		u /= 10
+	}
+	if neg {
+		i--
+		buf[i] = '-'
+	}
+	for _, c := range buf[i:] {
+		sb.WriteByte(c)
+	}
+}
+
+// writeScalar is formatScalar writing into the builder instead of returning a
+// string. The kinds a table is actually made of are handled without allocating;
+// anything rarer falls back to formatScalar so there is exactly one definition
+// of how a value renders.
+func writeScalar(sb *strings.Builder, v any) {
+	switch t := v.(type) {
+	case nil:
+		sb.WriteString("null")
+	case bool:
+		if t {
+			sb.WriteString("true")
+		} else {
+			sb.WriteString("false")
+		}
+	case int:
+		writeInt(sb, int64(t))
+	case int8:
+		writeInt(sb, int64(t))
+	case int16:
+		writeInt(sb, int64(t))
+	case int32:
+		writeInt(sb, int64(t))
+	case int64:
+		writeInt(sb, t)
+	case string:
+		if needsQuote(t) {
+			writeQuoted(sb, t)
+			return
+		}
+		sb.WriteString(t)
+	default:
+		sb.WriteString(formatScalar(v))
+	}
+}
+
+// writeQuoted is quote() writing in place, with no intermediate Builder.
+func writeQuoted(sb *strings.Builder, s string) {
+	sb.WriteByte('"')
+	for _, r := range s {
+		switch r {
+		case '"':
+			sb.WriteString(`\"`)
+		case '\\':
+			sb.WriteString(`\\`)
+		case '\n':
+			sb.WriteString(`\n`)
+		case '\r':
+			sb.WriteString(`\r`)
+		case '\t':
+			sb.WriteString(`\t`)
+		default:
+			sb.WriteRune(r)
+		}
+	}
+	sb.WriteByte('"')
+}
+
 func writeList(sb *strings.Builder, key string, items []any, depth int) {
 	pad := strings.Repeat(" ", depth*indentWidth)
 	if key == "" {
@@ -119,15 +258,33 @@ func writeList(sb *strings.Builder, key string, items []any, depth int) {
 		return
 	}
 	if fields, ok := tabular(items); ok {
-		fmt.Fprintf(sb, "%s%s[%d]{%s}:\n", pad, key, len(items), strings.Join(fields, ","))
+		// Written straight into the builder. The obvious version formats each
+		// cell into its own string, collects them in a slice and Joins it, per
+		// row -- which for a 2,000-row table is a slice, four strings, a join
+		// and an Fprintf each time, and was most of Encode's allocations.
+		sb.WriteString(pad)
+		sb.WriteString(key)
+		sb.WriteByte('[')
+		writeInt(sb, int64(len(items)))
+		sb.WriteString("]{")
+		for i, f := range fields {
+			if i > 0 {
+				sb.WriteByte(',')
+			}
+			sb.WriteString(f)
+		}
+		sb.WriteString("}:\n")
 		inner := strings.Repeat(" ", (depth+1)*indentWidth)
 		for _, it := range items {
 			row := it.(map[string]any)
-			cells := make([]string, len(fields))
+			sb.WriteString(inner)
 			for i, f := range fields {
-				cells[i] = formatScalar(row[f])
+				if i > 0 {
+					sb.WriteByte(',')
+				}
+				writeScalar(sb, row[f])
 			}
-			fmt.Fprintf(sb, "%s%s\n", inner, strings.Join(cells, ","))
+			sb.WriteByte('\n')
 		}
 		return
 	}
@@ -248,6 +405,35 @@ func formatScalar(v any) string {
 		return strconv.FormatBool(t)
 	case json.Number:
 		return t.String()
+	case int:
+		return strconv.FormatInt(int64(t), 10)
+	case int8:
+		return strconv.FormatInt(int64(t), 10)
+	case int16:
+		return strconv.FormatInt(int64(t), 10)
+	case int32:
+		return strconv.FormatInt(int64(t), 10)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case uint:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint64:
+		return strconv.FormatUint(t, 10)
+	case float32, float64:
+		// Deferred to encoding/json so a float reads back byte for byte the
+		// same as it would have through the round trip: Go's JSON encoder
+		// switches to exponent form at magnitudes strconv would not.
+		b, err := json.Marshal(t)
+		if err != nil {
+			return quote(fmt.Sprint(t))
+		}
+		return string(b)
 	case string:
 		if needsQuote(t) {
 			return quote(t)
@@ -256,6 +442,45 @@ func formatScalar(v any) string {
 	default:
 		return quote(fmt.Sprint(t))
 	}
+}
+
+// couldBeNumber reports whether s even begins like a number. It is a cheap
+// filter in front of strconv, never a parser: it may say yes to something that
+// is not a number, and the parse then settles it. It must never say no to
+// something that IS one, which is what TestPropertyCouldBeNumberNeverMissesOne
+// checks against strconv itself.
+func couldBeNumber(s string) bool {
+	if s == "" {
+		return false
+	}
+	c := s[0]
+	if c == '+' || c == '-' || c == '.' {
+		return true
+	}
+	if c >= '0' && c <= '9' {
+		return true
+	}
+	// Infinity and NaN are numbers to ParseFloat, but only in their exact
+	// spellings. Accepting every string that merely STARTS with i or n sent
+	// each one to the parser -- and in a table of file paths that is most of
+	// them, which was the whole allocation this filter exists to avoid.
+	switch c {
+	case 'i', 'I', 'n', 'N':
+		return isInfOrNaN(s)
+	}
+	return false
+}
+
+// isInfOrNaN reports whether s is one of the unsigned spellings ParseFloat
+// accepts. The signed forms are already covered: they start with + or -.
+func isInfOrNaN(s string) bool {
+	switch len(s) {
+	case 3:
+		return strings.EqualFold(s, "inf") || strings.EqualFold(s, "nan")
+	case 8:
+		return strings.EqualFold(s, "infinity")
+	}
+	return false
 }
 
 func needsQuote(s string) bool {
@@ -268,8 +493,15 @@ func needsQuote(s string) bool {
 	if strings.ContainsAny(s, ",\":\n\r\t\\[]{}") {
 		return true
 	}
-	if _, err := strconv.ParseFloat(s, 64); err == nil {
-		return true // would read back as a number
+	// Only ask strconv when the string could plausibly be a number. A failed
+	// ParseFloat allocates a *NumError with a copy of the string inside it, and
+	// for ordinary text -- a severity, a file path -- the parse was always
+	// going to fail. On a 2,000-row table those discarded errors were 98% of
+	// Encode's allocations.
+	if couldBeNumber(s) {
+		if _, err := strconv.ParseFloat(s, 64); err == nil {
+			return true // would read back as a number
+		}
 	}
 	return strings.HasPrefix(s, "- ")
 }

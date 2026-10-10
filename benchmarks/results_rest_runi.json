@@ -1,0 +1,23 @@
+{
+  "budget_note": "no Python counterpart benchmarked: a deadline split across phases with floors and per-phase contexts has no single library to compare against",
+  "chain_n": 20000,
+  "chain_seal_s": 0.007992958,
+  "chain_verify_s": 0.007490635,
+  "go": "go1.27.2",
+  "gojson_bytes": 144739,
+  "gojson_decode_s": 0.002481582,
+  "gojson_encode_s": 0.000566099,
+  "lazy_each_ms": 80,
+  "lazy_s": 0.080641535,
+  "lazy_values": 5,
+  "library": "runi",
+  "salvage_n": 2000,
+  "salvage_s": 0.008679138,
+  "tablelog_read_s": 0.010612989,
+  "tablelog_rows": 10000,
+  "tablelog_write_s": 0.047650466,
+  "toon_bytes": 76764,
+  "toon_decode_s": 0.007266362,
+  "toon_encode_s": 0.00687876,
+  "toon_rows": 2000
+}

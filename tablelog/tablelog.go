@@ -64,7 +64,7 @@ import (
 	"fmt"
 	"io"
 	"regexp"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -178,7 +178,11 @@ type Table struct {
 
 	mu    sync.Mutex
 	cache *state // newest head this handle has read; immutable once set
-	cpErr error
+	// atHead records that cache is a version this handle itself published, so
+	// the next commit may guess the next version instead of reading the head.
+	// Cleared the moment a guess loses. See commit.
+	atHead bool
+	cpErr  error
 }
 
 var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
@@ -349,11 +353,10 @@ func (s *Snapshot) Get(ctx context.Context, key string) (Record, bool, error) {
 	if err != nil {
 		return Record{}, false, err
 	}
-	r, ok := best[key]
-	if !ok || r.del {
+	if len(best) == 0 || best[0].del {
 		return Record{}, false, nil
 	}
-	return r.record(), true, nil
+	return best[0].record(), true, nil
 }
 
 // Scan returns live rows with the prefix, sorted by key.
@@ -376,30 +379,62 @@ func (s *Snapshot) Scan(ctx context.Context, prefix string) ([]Record, error) {
 			out = append(out, r.record())
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Key < out[j].Key })
+	// slices.SortFunc, not sort.Slice: sort.Slice swaps through reflection,
+	// which on a scan of ten thousand records is most of the sort.
+	slices.SortFunc(out, func(a, b Record) int { return strings.Compare(a.Key, b.Key) })
 	return out, nil
 }
 
-// merge reads files and keeps, per matching key, the row with the greatest
-// (version, ordinal). Tombstones are kept in the result so callers can tell
-// "deleted" from "never written"; they filter them.
-func (t *Table) merge(ctx context.Context, files []fileEntry, match func(string) bool) (map[string]row, error) {
+// merge reads files and returns, per matching key, the row with the greatest
+// (version, ordinal) — one row per key. Tombstones are kept in the result so
+// callers can tell "deleted" from "never written"; they filter them.
+//
+// The winners come back in the order their keys were first read, not in map
+// order. The set is the same either way; the order is not. Every caller sorts
+// the result by key, and a table written in key order — which an append-only
+// table with ascending keys, a time series, an event log is — then arrives
+// already sorted, so the sort is a linear check rather than a full sort of
+// every row the scan returned. Map iteration order is deliberately random, so
+// returning the map handed the sort its worst case every time.
+func (t *Table) merge(ctx context.Context, files []fileEntry, match func(string) bool) ([]row, error) {
 	all, err := t.readFiles(ctx, files)
 	if err != nil {
 		return nil, err
 	}
-	best := map[string]row{}
+	// Size both from the rows actually decoded, not from the row counts in the
+	// log: those come off the object store, and a size hint is an immediate
+	// allocation. Growing a 10,000-entry map and slice from nothing rehashes
+	// and recopies them a dozen times, which on a full scan costs more than
+	// the decoding did.
+	n := 0
+	for _, rows := range all {
+		n += len(rows)
+	}
+	// One pass, one map lookup per row. The map holds each key's SLOT in the
+	// result, not its row, so a key that is written again overwrites its slot
+	// in place and the result keeps the position of its first appearance —
+	// which is what makes the output nearly sorted for a table written in key
+	// order. Keeping the rows in the map instead meant a second pass over
+	// every row to get them out in that order, and a map entry per row the
+	// size of a row.
+	at := make(map[string]int, n)
+	out := make([]row, 0, n)
 	for _, rows := range all {
 		for _, r := range rows {
 			if !match(r.key) {
 				continue
 			}
-			if cur, ok := best[r.key]; !ok || r.newer(cur) {
-				best[r.key] = r
+			if i, seen := at[r.key]; seen {
+				if r.newer(out[i]) {
+					out[i] = r
+				}
+				continue
 			}
+			at[r.key] = len(out)
+			out = append(out, r)
 		}
 	}
-	return best, nil
+	return out, nil
 }
 
 // prefixEnd returns the smallest string greater than every string with prefix

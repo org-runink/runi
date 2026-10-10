@@ -218,3 +218,100 @@ func TestPropertyScoresStayPositiveAsATermSaturates(t *testing.T) {
 		}
 	}
 }
+
+// The fast tokeniser must be indistinguishable from SimpleTokenise, or the
+// index silently changes what it matches. It only claims ASCII, so the
+// property is: wherever it accepts the input, it produces exactly what
+// SimpleTokenise produces — and it must decline anything that is not ASCII
+// rather than guess.
+func TestPropertyFastTokeniserMatchesSimpleTokenise(t *testing.T) {
+	r := rand.New(rand.NewPCG(901, 902))
+
+	fixed := []string{
+		"", " ", "a", "A", "ABC def", "Hello, World!", "  spaced  out  ",
+		"MiXeD123case", "999", "a1b2c3", "---", "a--b", "trailing-",
+		"-leading", "UPPER lower MiXeD", "tabs\tand\nnewlines",
+		"über", "naïve café", "日本語", "Ω", "İstanbul", "ß",
+	}
+	check := func(s string) {
+		t.Helper()
+		got, ok := appendTokens(nil, s)
+		want := SimpleTokenise(s)
+		if !ok {
+			// Declined: must be because it really is not ASCII.
+			for i := 0; i < len(s); i++ {
+				if s[i] >= 0x80 {
+					return
+				}
+			}
+			t.Fatalf("declined pure-ASCII input %q", s)
+			return
+		}
+		if len(got) != len(want) {
+			t.Fatalf("%q: fast gave %q, SimpleTokenise gave %q", s, got, want)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%q: token %d is %q, SimpleTokenise says %q", s, i, got[i], want[i])
+			}
+		}
+	}
+	for _, s := range fixed {
+		check(s)
+	}
+
+	// Generated, weighted towards the boundaries: separators, digits, case
+	// changes, and the occasional non-ASCII byte to exercise the decline.
+	alphabet := []rune("aAzZ09 ,.-_\t\n!/'\"é日")
+	for i := 0; i < 20000; i++ {
+		n := r.IntN(24)
+		b := make([]rune, n)
+		for j := range b {
+			b[j] = alphabet[r.IntN(len(alphabet))]
+		}
+		check(string(b))
+	}
+}
+
+// An index built with the fast path must rank identically to one built with
+// the tokeniser handed in explicitly, which forces the old route. Same corpus,
+// same queries, same scores.
+func TestPropertyFastPathIndexRanksIdentically(t *testing.T) {
+	r := rand.New(rand.NewPCG(903, 904))
+	for i := 0; i < 300; i++ {
+		docs := randCorpus(r, 1+r.IntN(40))
+		fast := New(docs, Options{})
+		// Supplying Tokenise explicitly makes opts.simple false, so this index
+		// is built the long way even though the function is the same.
+		slow := New(docs, Options{Tokenise: SimpleTokenise})
+
+		q := randQuery(r)
+		a := fast.Search(q, 10)
+		b := slow.Search(q, 10)
+		if len(a) != len(b) {
+			t.Fatalf("%q: %d hits vs %d", q, len(a), len(b))
+		}
+		for j := range a {
+			if a[j].ID != b[j].ID || a[j].Score != b[j].Score {
+				t.Fatalf("%q hit %d: %+v vs %+v", q, j, a[j], b[j])
+			}
+		}
+	}
+}
+
+// Documents with non-ASCII text still index and search correctly: the fast
+// path declines them and SimpleTokenise takes over mid-corpus.
+func TestMixedASCIIAndUnicodeCorpus(t *testing.T) {
+	docs := []Document{
+		{ID: "ascii", Text: "the quick brown fox"},
+		{ID: "unicode", Text: "le café naïve über"},
+		{ID: "mixed", Text: "quick café"},
+	}
+	ix := New(docs, Options{})
+	if got := ix.Search("café", 5); len(got) != 2 {
+		t.Fatalf("café matched %d docs, want 2: %+v", len(got), got)
+	}
+	if got := ix.Search("quick", 5); len(got) != 2 {
+		t.Fatalf("quick matched %d docs, want 2: %+v", len(got), got)
+	}
+}

@@ -1,32 +1,32 @@
 {
   "accuracy": {
     "trials": 200,
-    "seconds_total": 0.106162149,
-    "seconds_per_fit": 0.000530810745,
-    "beta_bias": -0.0029339121028064017,
-    "beta_rmse": 0.06661752556113502,
-    "phi_bias": -0.0041855719391878324,
-    "phi_rmse": 0.05083732177890621,
+    "seconds_total": 0.252466125,
+    "seconds_per_fit": 0.001262330625,
+    "beta_bias": 0.0024862691464886534,
+    "beta_rmse": 0.03363974315590634,
+    "phi_bias": -0.004098543621279138,
+    "phi_rmse": 0.05062238583219956,
     "coverage_pct": 94.5,
     "coverage_points": 1200,
-    "forecast_rmse": 1.3169363452756337,
+    "forecast_rmse": 1.3160000889726187,
     "naive_rmse": 3.7104740961972245
   },
-  "estimator": "staged regression with ARIMA errors, conditional sum of squares",
+  "estimator": "regression with ARIMA errors; conditional least squares by prewhitened GLS alternated with the ARMA refit",
   "import_seconds": 0,
   "library": "runi/arimax",
   "timing": {
     "10000": {
       "reps": 3,
-      "seconds_median": 0.00792292
+      "seconds_median": 0.012516829
     },
     "2000": {
       "reps": 10,
-      "seconds_median": 0.001770265
+      "seconds_median": 0.00316442
     },
     "500": {
       "reps": 10,
-      "seconds_median": 0.000405891
+      "seconds_median": 0.001308104
     }
   },
   "version": "v0.1.7"

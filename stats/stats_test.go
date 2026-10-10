@@ -247,7 +247,7 @@ func TestSpearmanFindsMonotonicNonLinear(t *testing.T) {
 func TestSpearmanAveragesTiedRanks(t *testing.T) {
 	// Ties must take the average rank, or the coefficient is wrong.
 	x := []float64{1, 2, 2, 3}
-	r := ranks(x)
+	r := ranksSPRK(x)
 	want := []float64{1, 2.5, 2.5, 4}
 	for i := range want {
 		approx(t, r[i], want[i], 1e-12, "rank")
@@ -269,21 +269,25 @@ func TestSpearmanErrors(t *testing.T) {
 	}
 }
 
-// radixSort is reached only through ranks, which Spearman never calls with
+// The radix sort is reached only through Spearman, which never calls it with
 // fewer than two points. The guard is still right — a sort of nothing is a
 // no-op, and the first pass would index keys[0] — so it is exercised here
 // rather than removed, because the next caller may not have Spearman's check.
 func TestRadixSortDegenerateLengths(t *testing.T) {
 	for _, n := range []int{0, 1} {
-		keys := make([]uint64, n)
-		idx := make([]int32, n)
-		for i := range keys {
-			keys[i], idx[i] = 42, int32(i)
+		x := make([]float64, n)
+		for i := range x {
+			x[i] = 42
 		}
-		radixSort(keys, idx) // must not panic
-		if n == 1 && (keys[0] != 42 || idx[0] != 0) {
-			t.Errorf("n=1: keys=%v idx=%v", keys, idx)
+		w := getRankWork(n)
+		skeys, packed := w.sortByValue(x) // must not panic
+		if len(skeys) != n || len(packed) != n {
+			t.Fatalf("n=%d: got %d keys and %d positions", n, len(skeys), len(packed))
 		}
+		if n == 1 && (skeys[0] != rankKey(42) || uint32(packed[0]) != 0) {
+			t.Errorf("n=1: skeys=%v packed=%v", skeys, packed)
+		}
+		putRankWork(w)
 	}
 }
 

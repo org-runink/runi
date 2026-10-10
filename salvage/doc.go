@@ -37,8 +37,18 @@
 // you decoded. By default unknown fields are ignored, as encoding/json does;
 // use DecodeStrict to treat a value with unknown fields as not a match.
 //
+// # Speed
+//
+// The reply this package was written for -- prose around one flat JSON object,
+// read into a struct of ordinary fields -- is decoded in a single pass that
+// does not go through encoding/json at all. That path is a shortcut, never a
+// second opinion: anything it is not certain of, from an escape in a string to
+// a type with an UnmarshalJSON of its own, it declines and hands back, so what
+// decodes, and what it decodes to, is the same either way. The tests hold it
+// to that by running generated replies and a fuzzer through both.
+//
 // Bound the input yourself. The scan is linear for ordinary replies, but text
-// with many brackets that never close makes it quadratic, and Decode re-parses
-// each candidate it tries. On success the destination is replaced, not merged
-// into: a failed attempt never leaves it partly filled.
+// with many brackets that never close makes it quadratic, and Decode parses
+// each candidate it tries until one fits. On success the destination is
+// replaced, not merged into: a failed attempt never leaves it partly filled.
 package salvage

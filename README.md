@@ -355,7 +355,7 @@ c, _ := season.Classical(y, 7)         // the moving-average split, period known
 
 **There are two decompositions, and the cheap one is usually the answer.**
 `Classical` is the textbook centred moving average — the operation
-`statsmodels.seasonal_decompose` performs, in one O(n) pass, 3.9× faster than
+`statsmodels.seasonal_decompose` performs, in one O(n) pass, 8.5× faster than
 it and agreeing with it to 2e-13. It detects no period, finds no breaks and
 makes no forecast; it is the function for "I know this is hourly data, split
 it". `Decompose` is the fitted version, and it is what answers the two
@@ -643,7 +643,7 @@ in the package:
 
 ## Does this change anything for you?
 
-A table saying we compute a correlation in 1.06 ms where scipy takes 2.99 ms is
+A table saying we compute a correlation in 0.701 ms where scipy takes 5.14 ms is
 not a reason to adopt anything. Nobody's problem is a slow Pearson, the
 absolute saving is under two milliseconds, and "compiled language beats
 interpreted glue" is not news. If the ratios below are all you read, you should
@@ -685,7 +685,7 @@ keeps up.
 
 **3. Search with no model, no vector store, no GPU.** Ranking 5,000 documents
 takes 65 ms to index and 0.4 ms a query, in-process. The alternative is not
-`rank_bm25` being 1.4× slower; it is standing up an embedding service.
+`rank_bm25` being 4.8× slower; it is standing up an embedding service.
 
 **4. Nothing to audit.** Zero dependencies, enforced by CI — not "few", none.
 No transitive tree, no numpy ABI to pin, no supply chain to review, one static
@@ -696,7 +696,7 @@ speed is irrelevant.
 exact maximum likelihood — `arimax` minimises the *conditional* sum of squares,
 and while that no longer costs it precision in β it is still not the same
 estimator; you want the seasonal split done by least squares rather than the
-classical moving average — that variant is 9.6× slower than statsmodels; your
+classical moving average — that variant is only 1.17× faster than statsmodels; your
 data does not fit on one machine — that is what Spark is for; or you want an
 ecosystem, a notebook and a plotting library, which this will never have.
 
@@ -725,28 +725,53 @@ the whole reason the tables quote medians.
 
 | Operation | `runi` | The library people use | |
 |---|---:|---:|---|
-| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.99 ms — `scipy.stats.linregress` | **33× faster** |
-| Avro OCF write, 20,000 rows | **1.78 ms** | 15.07 ms — `fastavro` | **8.5× faster** |
-| BM25, 200 queries over 5,000 docs | **77.9 ms** | 617.1 ms — `rank_bm25` | **7.9× faster** |
-| Seasonal decomposition, n=4,000 | **0.042 ms** | 0.179 ms — `statsmodels` `seasonal_decompose` | **4.2× faster** |
-| Avro OCF read, 20,000 rows | **4.88 ms** | 16.35 ms — `fastavro` | **3.4× faster** |
-| Pearson, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8× faster** |
-| Spearman, n=200,000 | **17.2 ms** | 43.2 ms — `scipy.stats.spearmanr` | **2.5× faster** |
-| Index 5,000 docs | **70.4 ms** | 168.5 ms — `sklearn` `TfidfVectorizer` | **2.4× faster** |
-| Index 5,000 docs | **70.4 ms** | 91.8 ms — `rank_bm25` | **1.3× faster** |
-| …the same seasonal split by least squares instead, n=4,000 | 1.71 ms | **0.179 ms** — `statsmodels` | **9.6× slower** |
+| BM25, 200 queries over 5,000 docs | **3.92 ms** | 628.3 ms — `rank_bm25` | **160× faster** |
+| Pearson, n=200,000 | **0.123 ms** | 5.15 ms — `scipy.stats.pearsonr` | **41.9× faster** |
+| Avro OCF write, 20,000 rows | **1.10 ms** | 15.27 ms — `fastavro` | **13.9× faster** |
+| Spearman, n=200,000 | **3.51 ms** | 41.58 ms — `scipy.stats.spearmanr` | **11.9× faster** |
+| Index 5,000 docs | **19.3 ms** | 171.3 ms — `sklearn` `TfidfVectorizer` | **8.9× faster** |
+| Avro OCF read, 20,000 rows | **1.96 ms** | 17.17 ms — `fastavro` | **8.8× faster** |
+| Seasonal decomposition, n=4,000 | **0.0213 ms** | 0.1815 ms — `statsmodels` `seasonal_decompose` | **8.5× faster** |
+| OLS trend + t-test, n=100,000 | **0.0465 ms** | 0.300 ms — `scipy.stats.linregress` | **6.4× faster** |
+| Index 5,000 docs | **19.3 ms** | 93.5 ms — `rank_bm25` | **4.8× faster** |
+| …the same seasonal split by least squares instead, n=4,000 | **0.155 ms** | 0.182 ms — `statsmodels` | **1.17× faster** |
 
 The Avro file is also 740,202 bytes against fastavro's 741,181 — the same data,
 0.13% smaller, each readable by the other.
 
-**On the absolutes:** the sub-millisecond rows move by up to ±40% between runs
-on this host, so the ratios are the claim and the absolutes are context. `trend`
-was observed between 0.154 and 0.273 ms, `Pearson` between 0.75 and 1.09 ms,
-and `season.Classical` — at 41 microseconds the smallest figure in the table —
-between 0.025 and 0.089 ms over fourteen runs, which is why the claim is the
-3.9× and not the 0.0408.
+**On the absolutes:** every row is the median of five runs with both sides
+pinned to the same cores. The Python side is the noisier of the two — scipy's
+`pearsonr` ranged from 4.05 to 7.55 ms across those five. If you take the
+**worst** `runi` run against the **best** Python run in each row, the ratios
+become 136×, 30.0×, 9.9×, 10.8×, 7.6×, 7.7×, 6.2× and 4.2×. Those are the
+numbers we would defend if you reproduced this once and got unlucky, and they
+are the reason we are comfortable with the medians above.
 Figures that *are* deterministic — allocation counts, file sizes, and every
 accuracy number below — are stated as facts.
+
+**Two bugs in our own benchmark harness are worth describing, because both of
+them flattered somebody and neither was in the libraries.**
+
+The first was ours to lose. Every Python baseline used to be measured in one
+interpreter, one section after another, so what ran *earlier* in that process
+moved what came later: `scipy.stats.pearsonr` measured 0.80 ms if scikit-learn
+had been imported first and 2.6–6.9 ms if it had not. `baselines.py` now runs
+each library in its own process.
+
+The second was ours to gain, and it is the more embarrassing of the two. This
+table once published `OLS trend` at **33×**, on a scipy figure of 8.99 ms. That
+8.99 ms was real and it did reproduce — but it was not measuring
+`linregress`. The call was written `med(lambda: sps.linregress(np.arange(tn), t))`,
+with `np.arange(tn)` **inside** the timed lambda, so every timed call also
+allocated a fresh 800 KB array — while the Go side built its series once,
+before the timer started. The figure was bimodal for exactly that reason:
+~0.38 ms when the allocator could reuse a warm block, ~8.99 ms when the
+sections before it had churned memory and each call faulted in its pages. The
+array is now built once, outside the call, as it always should have been. Fixed,
+scipy does this in 0.300 ms and the honest ratio is **6.4×**.
+
+We would rather publish a 6.4× that survives being checked than a 33× that
+turns out to be a page-fault benchmark.
 
 **The two seasonal rows are the same question asked twice, and getting them
 honest took three goes.** `statsmodels.seasonal_decompose` is told the period
@@ -755,8 +780,8 @@ it against our default `Decompose`, which *also* runs a BIC-priced search for
 trend breaks — a larger job, reported as our loss. Turning the break search off
 made the timing fair but not the method: `Decompose` still fitted a line and a
 Fourier series by least squares, which is a different estimator with a
-different answer, and it lost by 9.5×. `season.Classical` is now the
-moving-average method itself, and it wins by 3.9× while agreeing with
+different answer. `season.Classical` is now the
+moving-average method itself, and it wins by 8.5× while agreeing with
 statsmodels to **2e-13** on a series of magnitude 300 — a few ulps of float64,
 verified over six series by
 [`benchmarks/verify_classical.py`](benchmarks/verify_classical.py). Same
@@ -767,11 +792,11 @@ the extra work is priced separately rather than folded in:
 
 | `season`, n=4,000, period given | |
 |---|---:|
-| `Classical` — *the operation statsmodels performs, by its method* | **0.0408 ms** |
-| `Decompose`, no break search — least-squares trend + Fourier season | 1.70 ms |
-| …plus the BIC changepoint search (the default) | 18.4 ms |
-| …plus detecting the period instead of being told it | 56.0 ms |
-| `season.Period` detection on its own | 4.38 ms |
+| `Classical` — *the operation statsmodels performs, by its method* | **0.0213 ms** |
+| `Decompose`, no break search — least-squares trend + Fourier season | 0.155 ms |
+| …plus the BIC changepoint search (the default) | 16.9 ms |
+| …plus detecting the period instead of being told it | 53.5 ms |
+| `season.Period` detection on its own | 3.54 ms |
 
 So: if you know your period and want the classical decomposition, use
 `Classical`, which is faster than statsmodels at it. What the least-squares
@@ -786,6 +811,61 @@ not need, since tied ranks are averaged. It now sorts by radix on the float's
 bit pattern. The BM25 index was 177.9 ms because it hashed every token twice and
 allocated a map per document; terms are now interned once into flat postings.
 Neither was a limit of the language.
+
+### The other six packages
+
+The comparison above covers six packages. The other six — `salvage`, `chain`,
+`lazy`, `toon`, `tablelog` and `budget` — had no Python figure at all, which
+made the table a selection of our best cases. Here they are, against what a
+Python author would actually reach for.
+
+| Operation | `runi` | The Python you would write | |
+|---|---:|---:|---|
+| `salvage` 2,000 model replies | **0.385 ms** | 1.033 ms — `json.raw_decode` loop | **2.7× faster** |
+| `tablelog` read 10,000 rows | **2.88 ms** | 4.63 ms — `sqlite3` | **1.6× faster** |
+| `tablelog` write 10,000 rows | **4.62 ms** | 7.12 ms — `sqlite3` | **1.5× faster** |
+| `chain` seal 20,000 records | **5.68 ms** | 8.44 ms — `hashlib` | **1.5× faster** |
+| `chain` verify 20,000 records | **4.73 ms** | 7.00 ms — `hashlib` | **1.5× faster** |
+| `lazy`, five 80 ms values together | **80.7 ms** | 82.5 ms — `ThreadPoolExecutor` | **1.02× faster** |
+
+`budget` has **no Python counterpart and none was invented** — a deadline split
+across phases with floors and per-phase contexts is not a thing one library
+does.
+
+`toon` is compared against Go's own `encoding/json` instead, because comparing
+a Go implementation to CPython's C `json` module measures the C and not the
+format:
+
+| | `toon` | Go `encoding/json` | |
+|---|---:|---:|---|
+| encode 2,000 rows | **0.497 ms**, **26 allocs** | 0.574 ms, 4,005 allocs | **1.16× faster** |
+| decode 2,000 rows | **1.746 ms**, 42,030 allocs | 1.806 ms, 28,022 allocs | **1.03× faster** |
+| bytes for the same document | **76,764** | 144,739 | **47% smaller** |
+
+### How these were measured, and a trap worth knowing about
+
+**Both sides are pinned to the same cores.** The machine is an ASUS Ascent GX10,
+and it has two core clusters:
+
+```
+10 cores at capacity 718–731      10 cores at capacity 997–1024
+```
+
+Unpinned, a process lands on either cluster at the scheduler's discretion, and
+on this workload the difference is about **2×** — for both languages. An
+unpinned Go-versus-Python comparison on that box is a coin flip rather than a
+measurement, and it is how an earlier version of this table reported `salvage`
+as 8.3× *slower* than Python: the Go figure came from a slow core and the
+Python figure from a fast one. On equal footing the old code was 3.8× slower,
+and the current code is 2.7× faster.
+
+Everything above is `taskset -c 15-19` on both sides, medians of five runs.
+The `toon` rows are `go test -bench -benchtime=3s -count=5`, because five
+whole-process samples of a sub-millisecond operation measure the garbage
+collector as much as the code.
+
+If you reproduce these, pin. If you do not, you will get a different answer
+each time, and so will we.
 
 ### Forecasting, head to head with `statsmodels`
 
@@ -804,11 +884,11 @@ identical numbers.
 
 | | `runi/arimax` | `statsmodels` SARIMAX | |
 |---|---:|---:|---|
-| Fit, n=500 | **1.35 ms** | 15.79 ms | **12× faster** |
-| Fit, n=2,000 | **4.25 ms** | 53.79 ms | **13× faster** |
-| Fit, n=10,000 | **18.31 ms** | 267.8 ms | **15× faster** |
-| Per fit over the 200-trial run | **1.58 ms** | 16.32 ms | **10× faster** |
-| Start-up before the first fit | **0 ms** (compiled in) | 676 ms | |
+| Fit, n=500 | **1.17 ms** | 14.78 ms | **12.6× faster** |
+| Fit, n=2,000 | **3.34 ms** | 49.93 ms | **15.0× faster** |
+| Fit, n=10,000 | **12.52 ms** | 244.9 ms | **19.6× faster** |
+| Per fit over the 200-trial run | **1.24 ms** | 15.28 ms | **12.3× faster** |
+| Start-up before the first fit | **0 ms** (compiled in) | 673 ms | |
 | | | | |
 | 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
 | Forecast RMSE, h=6 | 1.31600 | 1.31601 | within **0.001%** |
@@ -830,8 +910,18 @@ in the table.
 generalised-least-squares solve for the coefficients on *prewhitened* data with
 a warm-started refit of the ARMA, until the coefficients stop moving — feasible
 GLS, which is Cochrane–Orcutt generalised from AR(1) errors to ARMA(p,q).
-Fitting became about 3× slower; β went from 0.06662 to 0.03364, against
-statsmodels' 0.03361. The speed rows above are the new ones.
+Fitting became **2.9× slower** and β went from 0.06662 to 0.03364, against
+statsmodels' 0.03361. Both halves of that sentence are measured the same way —
+the commit before GLS (`2ec9885`) and the current one, same generated data, both
+pinned to the same cores: 0.410 ms against 1.178 ms per fit, and at n=500,
+0.282 ms against 1.17 ms.
+
+That is the whole trade, and it is worth stating plainly rather than burying:
+**we gave up two thirds of our speed to halve the error on β** — the
+coefficient you are usually fitting the model *for*. It is still 12–20× faster
+than SARIMAX afterwards, which is why it was the right way round. If you are
+fitting at scale and do not need β to that precision, the staged estimator was
+not wrong, only inefficient, and it was about three times quicker.
 
 What still differs is the objective, not the precision. `arimax` minimises the
 **conditional** sum of squares, which conditions on the first p observations and
@@ -889,12 +979,12 @@ The same correlation over 200,000 rows, on the same 20-core machine:
 
 | | Time |
 |---|---:|
-| `runi/stats` | **1.06 ms** |
-| `scipy.stats.pearsonr` | 2.99 ms |
-| SparkML, warm session | 408.7 ms |
-| SparkML, including session start | 3.18 s |
+| `runi/stats` | **0.701 ms** |
+| `scipy.stats.pearsonr` | 5.14 ms |
+| SparkML, warm session | 282.9 ms |
+| SparkML, including session start | 2.57 s |
 
-**387× on compute**, and about **3,000×** once a caller pays for the session.
+**403× on compute**, and about **3,700×** once a caller pays for the session.
 Spark earns all of that back the moment the data stops fitting on one machine.
 At this size it fits, and it spent 7.0 s building a DataFrame for a calculation
 that takes about a millisecond. The Spark figures are a single run, not a

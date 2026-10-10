@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math/rand/v2"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -291,5 +292,118 @@ func TestPropertyTruncationNeverInventsData(t *testing.T) {
 				t.Fatalf("a truncated document parsed into something unencodable: %v\n%q", err, text[:cut])
 			}
 		}
+	}
+}
+
+// The fast path must be invisible. A generic tree now skips the
+// marshal-and-reparse round trip entirely, so the one thing that could go
+// wrong is it producing different bytes from the route it replaced. This
+// encodes every generated document both ways and requires them identical.
+func TestPropertyFastPathMatchesTheRoundTrip(t *testing.T) {
+	r := rand.New(rand.NewPCG(601, 602))
+	for i := 0; i < 4000; i++ {
+		doc := randTopLevel(r)
+
+		fast, ferr := Encode(doc)
+
+		// The long way, forced: marshal and re-parse, exactly as Encode did
+		// before the fast path existed.
+		b, err := json.Marshal(doc)
+		if err != nil {
+			continue
+		}
+		reparsed, err := jsonToValue(b)
+		if err != nil {
+			continue
+		}
+		slow, serr := encodeGeneric(reparsed)
+
+		if (ferr == nil) != (serr == nil) {
+			t.Fatalf("fast err=%v but round-trip err=%v", ferr, serr)
+		}
+		if ferr != nil {
+			continue
+		}
+		if fast != slow {
+			t.Fatalf("fast path differs from the round trip\n--- fast ---\n%s\n--- slow ---\n%s", fast, slow)
+		}
+	}
+}
+
+// The decode fast path must be invisible too. A generic destination is now
+// filled straight from the parsed tree instead of being rendered to JSON and
+// parsed back, so the risk is that it produces something subtly different --
+// an int64 where a float64 used to be, a map where the round trip gave
+// something else. This decodes every generated document both ways and requires
+// them equal, compared through json.Marshal so type differences show.
+func TestPropertyDecodeFastPathMatchesTheRoundTrip(t *testing.T) {
+	r := rand.New(rand.NewPCG(701, 702))
+	for i := 0; i < 3000; i++ {
+		doc := randTopLevel(r)
+		text, err := Encode(doc)
+		if err != nil {
+			continue
+		}
+
+		var fast map[string]any
+		ferr := Decode(text, &fast)
+
+		// The long way, forced: the same parse, then marshal and unmarshal.
+		parsed, perr := Parse(text)
+		if perr != nil {
+			continue
+		}
+		b, err := json.Marshal(parsed)
+		if err != nil {
+			continue
+		}
+		var slow map[string]any
+		serr := json.Unmarshal(b, &slow)
+
+		if (ferr == nil) != (serr == nil) {
+			t.Fatalf("fast err=%v round-trip err=%v\n%s", ferr, serr, text)
+		}
+		if ferr != nil {
+			continue
+		}
+		fb, _ := json.Marshal(fast)
+		sb, _ := json.Marshal(slow)
+		if string(fb) != string(sb) {
+			t.Fatalf("decode paths differ\n fast: %s\n slow: %s\n--- text ---\n%s", fb, sb, text)
+		}
+	}
+}
+
+// couldBeNumber is a cheap filter in front of strconv.ParseFloat. It is
+// allowed to say yes to something that is not a number -- the parse then
+// settles it -- but it must NEVER say no to something that is, because that
+// would leave a numeric-looking string unquoted and it would read back as a
+// number instead of text. Checked against strconv itself over generated
+// strings, including the spellings people forget: leading +, bare .5,
+// exponents, hex floats, infinity and NaN.
+func TestPropertyCouldBeNumberNeverMissesOne(t *testing.T) {
+	r := rand.New(rand.NewPCG(801, 802))
+	fixed := []string{
+		"0", "-0", "+1", ".5", "-.5", "+.5", "1e10", "1E-10", "-1e+10",
+		"0x1p-2", "Inf", "+Inf", "-Inf", "inf", "infinity", "NaN", "nan",
+		"1_000", "01", "1.", "..", "", " 1", "1 ", "abc", "e5", "-", "+",
+	}
+	check := func(s string) {
+		_, err := strconv.ParseFloat(s, 64)
+		if err == nil && !couldBeNumber(s) {
+			t.Fatalf("couldBeNumber(%q) said no but ParseFloat accepted it", s)
+		}
+	}
+	for _, s := range fixed {
+		check(s)
+	}
+	alphabet := []rune("0123456789+-.eExXpPinfaINFA_ ")
+	for i := 0; i < 20000; i++ {
+		n := r.IntN(8)
+		b := make([]rune, n)
+		for j := range b {
+			b[j] = alphabet[r.IntN(len(alphabet))]
+		}
+		check(string(b))
 	}
 }

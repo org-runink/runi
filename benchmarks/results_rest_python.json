@@ -1,0 +1,20 @@
+{
+  "library": "python stdlib",
+  "python": "3.12.3",
+  "salvage_n": 2000,
+  "salvage_s": 0.0010429180110804737,
+  "chain_n": 20000,
+  "chain_seal_s": 0.008569984987843782,
+  "chain_verify_s": 0.007171545003075153,
+  "lazy_values": 5,
+  "lazy_each_ms": 80,
+  "lazy_s": 0.08469921903451905,
+  "toon_rows": 2000,
+  "json_encode_s": 0.0006008670316077769,
+  "json_bytes": 160739,
+  "json_decode_s": 0.0005992199876345694,
+  "tablelog_rows": 10000,
+  "tablelog_write_s": 0.006848086952231824,
+  "tablelog_read_s": 0.004708315012976527,
+  "budget_note": "no counterpart benchmarked"
+}

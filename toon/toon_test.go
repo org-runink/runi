@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"reflect"
 	"strings"
 	"testing"
@@ -516,7 +517,12 @@ func TestEncodeReportsAFailedConversion(t *testing.T) {
 	jsonToValue = func([]byte) (any, error) { return nil, errors.New("cannot re-read") }
 	defer func() { jsonToValue = orig }()
 
-	if _, err := Encode(map[string]any{"a": 1}); err == nil {
+	// The input must NOT be a generic tree: a map[string]any is written
+	// directly now and never reaches jsonToValue, so a struct is used to force
+	// the marshal-and-reparse route this error belongs to.
+	if _, err := Encode(struct {
+		A int `json:"a"`
+	}{1}); err == nil {
 		t.Error("encoded a document whose conversion failed")
 	}
 }
@@ -696,11 +702,15 @@ func TestUnreachableGuards(t *testing.T) {
 	}
 
 	// jsonToValue's error cannot happen: the bytes came from json.Marshal one
-	// line earlier.
+	// line earlier. Note the input must be something that does NOT take the
+	// generic fast path -- a map[string]any never reaches jsonToValue now, so
+	// a struct is used to force the marshal-and-reparse route.
 	orig := jsonToValue
 	defer func() { jsonToValue = orig }()
 	jsonToValue = func([]byte) (any, error) { return nil, errors.New("boom") }
-	if _, err := Encode(map[string]any{"a": 1}); err == nil {
+	if _, err := Encode(struct {
+		A int `json:"a"`
+	}{1}); err == nil {
 		t.Error("Encode ignored a jsonToValue failure")
 	}
 }
@@ -711,7 +721,12 @@ func TestMarshalDocFailureIsReported(t *testing.T) {
 	orig := marshalDoc
 	defer func() { marshalDoc = orig }()
 	marshalDoc = func(any) ([]byte, error) { return nil, errors.New("boom") }
-	var got map[string]any
+	// A TYPED destination, because a generic one is filled directly now and
+	// never reaches marshalDoc. This error belongs to the round trip, so the
+	// test has to take the round trip.
+	var got struct {
+		A int `json:"a"`
+	}
 	if err := Decode("a: 1\n", &got); err == nil {
 		t.Error("Decode ignored a marshal failure")
 	}
@@ -793,5 +808,195 @@ func TestADeclaredCountWithNoBodyIsRefusedOnlyByStrict(t *testing.T) {
 func TestJSONToValueRejectsBrokenInput(t *testing.T) {
 	if _, err := jsonToValue([]byte("{")); err == nil {
 		t.Error("jsonToValue accepted a truncated object")
+	}
+}
+
+// Every numeric kind a generic tree can hold must render exactly as it would
+// have through the marshal-and-reparse route, which is what json.Marshal
+// produces. These all reach formatScalar directly now that the fast path
+// skips the round trip.
+func TestNativeNumbersRenderLikeJSON(t *testing.T) {
+	// Checked against the ENCODED TEXT, not against a decoded value: Decode
+	// into `any` goes through encoding/json and rounds past 2^53, so a
+	// round-trip comparison would be testing that limitation rather than the
+	// encoder. See TestLargeIntegersNeedParseNotDecode.
+	cases := map[string]any{
+		"i": int(-7), "i8": int8(-8), "i16": int16(-300), "i32": int32(-70000),
+		"i64": int64(-1 << 40),
+		"u":   uint(7), "u8": uint8(255), "u16": uint16(65535),
+		"u32": uint32(1 << 31), "u64": uint64(1 << 62),
+		"f32": float32(1.5), "f64": float64(-2.25),
+		"big": 1e21, "small": 1e-7,
+	}
+	for k, v := range cases {
+		text, err := Encode(map[string]any{k: v})
+		if err != nil {
+			t.Fatalf("%s: encode: %v", k, err)
+		}
+		want, err := json.Marshal(v)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// float32 widens when it reaches encoding/json through an `any`, so
+		// compare against the same widening the round trip would have done.
+		if f, ok := v.(float32); ok {
+			want, _ = json.Marshal(float64(f))
+		}
+		if got, expect := strings.TrimSpace(text), k+": "+string(want); got != expect {
+			t.Errorf("%s: encoded %q, want %q", k, got, expect)
+		}
+	}
+}
+
+// genericTree must refuse anything it cannot write directly, so Encode falls
+// back to encoding/json and struct tags are still honoured.
+func TestFastPathDeclinesNonGenericValues(t *testing.T) {
+	type tagged struct {
+		Renamed int    `json:"renamed"`
+		Skipped string `json:"-"`
+	}
+	for _, v := range []any{
+		tagged{1, "hidden"},                              // a struct
+		map[string]any{"a": tagged{2, "x"}},              // a struct inside a map
+		[]any{tagged{3, "y"}},                            // a struct inside a list
+		map[string]any{"a": map[string]string{"b": "c"}}, // a typed map
+		map[string]any{"a": []string{"x"}},               // a typed slice
+	} {
+		if _, ok := genericTree(v); ok {
+			t.Errorf("%T was accepted by the fast path", v)
+		}
+	}
+	// And the fallback still applies the tags.
+	text, err := Encode(tagged{Renamed: 9, Skipped: "hidden"})
+	if err != nil {
+		t.Fatalf("encode: %v", err)
+	}
+	if !strings.Contains(text, "renamed: 9") {
+		t.Errorf("json tag not applied: %q", text)
+	}
+	if strings.Contains(text, "hidden") {
+		t.Errorf("json:\"-\" field leaked: %q", text)
+	}
+}
+
+// A float that json.Marshal itself refuses (NaN, infinity) cannot reach
+// formatScalar through Encode, because checkEncodable and json.Marshal both
+// reject the document first. Exercised directly.
+func TestFormatScalarRejectsUnmarshalableFloat(t *testing.T) {
+	got := formatScalar(math.NaN())
+	if got == "" || got[0] != '"' {
+		t.Errorf("NaN rendered as %q, want a quoted fallback", got)
+	}
+}
+
+// Decode fills a generic destination directly, and has to handle each generic
+// shape plus the case where the document does not match the destination — in
+// which case it must fall through so encoding/json raises its own type error
+// rather than this package inventing one.
+func TestDecodeIntoEachGenericDestination(t *testing.T) {
+	const mapping = "a: 1\nb: two\n"
+	const list = "- 1\n- 2\n"
+
+	t.Run("into any", func(t *testing.T) {
+		var got any
+		if err := Decode(mapping, &got); err != nil {
+			t.Fatal(err)
+		}
+		m, ok := got.(map[string]any)
+		if !ok || m["b"] != "two" {
+			t.Fatalf("got %#v", got)
+		}
+		if f, ok := m["a"].(float64); !ok || f != 1 {
+			t.Fatalf("a came back as %T %v, want float64(1)", m["a"], m["a"])
+		}
+	})
+
+	t.Run("into []any", func(t *testing.T) {
+		var got []any
+		if err := Decode(list, &got); err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 2 {
+			t.Fatalf("got %#v", got)
+		}
+		if f, ok := got[0].(float64); !ok || f != 1 {
+			t.Fatalf("first came back as %T %v", got[0], got[0])
+		}
+	})
+
+	t.Run("mapping into []any falls through to a json type error", func(t *testing.T) {
+		var got []any
+		err := Decode(mapping, &got)
+		if err == nil {
+			t.Fatal("a mapping decoded into a slice")
+		}
+		if _, ok := err.(*json.UnmarshalTypeError); !ok {
+			t.Fatalf("got %T (%v), want *json.UnmarshalTypeError", err, err)
+		}
+	})
+
+	t.Run("list into map[string]any falls through to a json type error", func(t *testing.T) {
+		var got map[string]any
+		err := Decode(list, &got)
+		if err == nil {
+			t.Fatal("a list decoded into a map")
+		}
+		if _, ok := err.(*json.UnmarshalTypeError); !ok {
+			t.Fatalf("got %T (%v), want *json.UnmarshalTypeError", err, err)
+		}
+	})
+}
+
+// writeInt and writeScalar form the hot path and are written by hand, so each
+// branch is exercised directly rather than only through whatever a table
+// happens to contain.
+func TestWriteScalarCoversEveryKind(t *testing.T) {
+	for _, tc := range []struct {
+		in   any
+		want string
+	}{
+		{nil, "null"}, {true, "true"}, {false, "false"},
+		{int(0), "0"}, {int(7), "7"}, {int(-7), "-7"},
+		{int8(-128), "-128"}, {int16(32767), "32767"},
+		{int32(-2147483648), "-2147483648"},
+		{int64(9223372036854775807), "9223372036854775807"},
+		{int64(-9223372036854775808), "-9223372036854775808"},
+		{"plain", "plain"},
+		{"needs,quote", `"needs,quote"`},
+		{"", `""`},
+		{"1.5", `"1.5"`},      // would read back as a number
+		{uint64(42), "42"},    // falls through to formatScalar
+		{float64(2.5), "2.5"}, // likewise
+		{"with\nnewline", `"with\nnewline"`},
+		{`with"quote`, `"with\"quote"`},
+		{"with\\backslash", `"with\\backslash"`},
+		{"with\ttab", `"with\ttab"`},
+		{"with\rreturn", `"with\rreturn"`},
+	} {
+		var sb strings.Builder
+		writeScalar(&sb, tc.in)
+		if got := sb.String(); got != tc.want {
+			t.Errorf("writeScalar(%#v) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// couldBeNumber's job is to be cheap and never wrong in the dangerous
+// direction. The property test proves it never misses a real number; this
+// pins the shape of the filter itself.
+func TestCouldBeNumberFilter(t *testing.T) {
+	for _, s := range []string{"0", "9", "-1", "+1", ".5", "Inf", "inf", "Infinity", "NaN", "nan"} {
+		if !couldBeNumber(s) {
+			t.Errorf("couldBeNumber(%q) = false, want true", s)
+		}
+	}
+	// "I" and "N" start like Inf and NaN but are not numbers, and the filter
+	// now says so -- which is the point: a table full of paths beginning with
+	// i or n must not be sent to the parser.
+	for _, s := range []string{"", "abc", "high", "internal/pkg1/file.go", "true",
+		"e5", "x1", "/2", "I", "N", "info", "nope", "infinit"} {
+		if couldBeNumber(s) {
+			t.Errorf("couldBeNumber(%q) = true, want false", s)
+		}
 	}
 }

@@ -93,7 +93,7 @@ func (p *parser) value(k keySpec, rest string, depth int, at line) (any, error) 
 		return p.array(k, rest, depth, at)
 	}
 	if rest != "" {
-		return scalar(rest, at)
+		return scalar(rest, at, p.floatNums)
 	}
 	// Nothing on the line: a nested block, or an explicit empty value at the
 	// end of the document.
@@ -113,7 +113,7 @@ func (p *parser) array(k keySpec, rest string, depth int, at line) (any, error) 
 		parts := splitValues(rest)
 		out := make([]any, 0, len(parts))
 		for _, s := range parts {
-			v, err := scalar(strings.TrimSpace(s), at)
+			v, err := scalar(strings.TrimSpace(s), at, p.floatNums)
 			if err != nil {
 				return nil, err
 			}
@@ -167,7 +167,7 @@ func (p *parser) rows(k keySpec, depth int, at line) (any, error) {
 		}
 		row := make(map[string]any, len(vals))
 		for i, f := range k.fields {
-			v, err := scalar(strings.TrimSpace(vals[i]), l)
+			v, err := scalar(strings.TrimSpace(vals[i]), l, p.floatNums)
 			if err != nil {
 				return nil, err
 			}
@@ -220,7 +220,11 @@ func splitValues(s string) []string {
 
 // scalar reads one value: a quoted string, a number, a bool, null, or a bare
 // string.
-func scalar(s string, at line) (any, error) {
+// floatNums makes a whole number come back as float64 rather than int64. The
+// conversion still goes through ParseInt first, so the value a caller sees is
+// bit-for-bit what converting the int64 afterwards produced -- this moved the
+// conversion earlier, it did not change it.
+func scalar(s string, at line, floatNums bool) (any, error) {
 	switch {
 	case s == "":
 		return "", nil
@@ -239,6 +243,9 @@ func scalar(s string, at line) (any, error) {
 		return v, nil
 	}
 	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+		if floatNums {
+			return float64(n), nil
+		}
 		return n, nil
 	}
 	if f, err := strconv.ParseFloat(s, 64); err == nil {

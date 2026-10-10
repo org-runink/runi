@@ -27,18 +27,18 @@ repetitions.
 
 | Operation | `runi` | Python | Faster by |
 |---|---|---|---|
-| ARIMAX fit, n=500 | **1.35 ms** | 15.79 ms — statsmodels | **12×** |
-| ARIMAX fit, n=2,000 | **4.25 ms** | 53.79 ms — statsmodels | **13×** |
-| ARIMAX fit, n=10,000 | **18.31 ms** | 267.8 ms — statsmodels | **15×** |
-| OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33×** |
-| Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — fastavro | **8.9×** |
-| BM25 query ×200, 5,000 docs | **79.0 ms** | 648.5 ms — rank-bm25 | **8.2×** |
-| Pearson correlation, n=200,000 | **1.06 ms** | 2.99 ms — `scipy.stats.pearsonr` | **2.8×** |
-| Index 5,000 docs | **65.4 ms** | 166.7 ms — `sklearn` `TfidfVectorizer` | **2.6×** |
-| Spearman correlation, n=200,000 | **17.9 ms** | 34.0 ms — scipy | **1.9×** |
-| BM25 index build, 5,000 docs | **65.4 ms** | 91.2 ms — rank-bm25 | **1.4×** |
-| Avro OCF read, 20,000 rows | **16.4 ms** | 18.0 ms — fastavro | **1.1×** |
-| Seasonal decomposition, n=4,000 | **0.0408 ms** | 0.161 ms — statsmodels `seasonal_decompose` | **3.9×** |
+| ARIMAX fit, n=10,000 | **12.52 ms** | 244.9 ms — statsmodels | **19.6×** |
+| ARIMAX fit, n=500 | **1.17 ms** | 14.78 ms — statsmodels | **12.6×** |
+| ARIMAX fit, n=2,000 | **3.34 ms** | 49.93 ms — statsmodels | **15.0×** |
+| BM25 query ×200, 5,000 docs | **3.92 ms** | 628.3 ms — rank-bm25 | **160×** |
+| Pearson correlation, n=200,000 | **0.123 ms** | 5.15 ms — `scipy.stats.pearsonr` | **41.9×** |
+| Avro OCF write, 20,000 rows | **1.10 ms** | 15.27 ms — fastavro | **13.9×** |
+| Spearman correlation, n=200,000 | **3.51 ms** | 41.58 ms — scipy | **11.9×** |
+| Index 5,000 docs | **19.3 ms** | 171.3 ms — `sklearn` `TfidfVectorizer` | **8.9×** |
+| Avro OCF read, 20,000 rows | **1.96 ms** | 17.17 ms — fastavro | **8.8×** |
+| Seasonal decomposition, n=4,000 | **0.0213 ms** | 0.1815 ms — statsmodels `seasonal_decompose` | **8.5×** |
+| OLS trend + t-test, n=100,000 | **0.0465 ms** | 0.300 ms — `scipy.stats.linregress` | **6.4×** |
+| BM25 index build, 5,000 docs | **19.3 ms** | 93.5 ms — rank-bm25 | **4.8×** |
 
 Spearman and the BM25 index were both losses when this page was first written —
 243.9 ms and 177.9 ms. `ranks` sorted through `sort.SliceStable`, paying for
@@ -48,19 +48,41 @@ pattern. The index hashed every token twice and allocated a map per document;
 terms are now interned once into flat postings. Neither was a property of the
 language, which is why they are no longer in the table below.
 
-## Where `runi` loses
+## Where the margin is thin
 
-| Operation | `runi` | Python | Slower by | Why |
-|---|---|---|---|---|
-| The same seasonal split by least squares, n=4,000 | 1.70 ms | **0.161 ms** — statsmodels | **10.6×** | `season.Decompose` fits a straight line and a Fourier series by least squares. It costs more than a moving average and gives something a moving average cannot: a model that extrapolates. `season.Classical` is the moving-average method, is in the table above, and is the row to compare against `seasonal_decompose`. |
+As of this revision there is no operation here that a Python library does
+faster. That is a statement about this set of operations on this machine, not a
+law, so the rows where we win by very little are listed in their own table
+rather than buried among the large multiples — those are the ones most likely
+to flip on your hardware, your data, or the next release of the library we are
+measuring against.
 
-**This row took three goes to make honest.** First it compared our default
+| Operation | `runi` | Python | Faster by |
+|---|---|---|---|
+| The same seasonal split by least squares, n=4,000 | **0.155 ms** | 0.182 ms — statsmodels | **1.17×** |
+| `toon` decode, 2,000 rows | **1.746 ms** | 1.806 ms — Go `encoding/json` | **1.03×** |
+
+The seasonal row **used to be a 5.0× loss**. It is closed now, and closed
+narrowly:
+`season.Decompose` fits a straight line and a Fourier series by least squares,
+which costs more than a centred moving average and buys something a moving
+average cannot give you — a model that extrapolates. It is now 7.8× faster than
+it was, which is what moved it across the line. If you want the operation
+`seasonal_decompose` actually performs, that is `season.Classical` in the table
+above, at 8.5×.
+
+The `toon` decode row is a Go-against-Go comparison and wins by three per cent;
+`toon` still allocates 42,030 times against `encoding/json`'s 28,022 for the
+same document, and that gap is where any further work on it belongs. The reason
+to reach for `toon` is the 47% smaller output, not the decode speed.
+
+**The seasonal comparison took three goes to make honest.** First it compared our default
 `Decompose`, which also runs a BIC-priced search for trend breaks that
 `seasonal_decompose` does not do at all — a larger job, billed to us as a loss.
 Passing `MaxChangepoints: -1` made the *timing* like for like but not the
 *method*: a least-squares line plus a Fourier series is a different estimator
 from a centred moving average, with a different answer. `season.Classical` is
-now the moving-average method itself: 3.9× faster than `seasonal_decompose` and
+now the moving-average method itself: 8.5× faster than `seasonal_decompose` and
 agreeing with it to **2e-13** on a series of magnitude 300, which is a few ulps
 of float64. Run `go run ./verify_classical && python verify_classical.py` to
 check that for yourself; it writes both sides' components and compares them on
@@ -68,11 +90,11 @@ the interior, where a centred average is defined.
 
 | `season`, n=4,000, period given | |
 |---|---|
-| `Classical` — *what statsmodels does, by its method* | **0.0408 ms** |
-| `Decompose`, no break search — least squares + Fourier | 1.70 ms |
-| …plus the BIC changepoint search (our default) | 18.4 ms |
-| …plus detecting the period instead of being told it | 56.0 ms |
-| `season.Period` detection on its own | 4.38 ms |
+| `Classical` — *what statsmodels does, by its method* | **0.0213 ms** |
+| `Decompose`, no break search — least squares + Fourier | 0.155 ms |
+| …plus the BIC changepoint search (our default) | 16.9 ms |
+| …plus detecting the period instead of being told it | 53.5 ms |
+| `season.Period` detection on its own | 3.54 ms |
 
 The honest summary: use `Classical` when you know the period, and it is faster
 than statsmodels. `Decompose` is for the case where you do not already know the
@@ -107,7 +129,7 @@ with ARMA(1,1) errors at φ=0.6, θ=0.3 the inefficiency is a factor of four in
 variance — twice the standard error. `Fit` now alternates a prewhitened
 generalised-least-squares solve with a warm-started ARMA refit, descending on
 one conditional-sum-of-squares objective instead of fitting two blocks once
-each. Fitting got about 3× slower, out of a 37× margin, and the ARIMAX speed
+each. Fitting got about 2.9× slower, out of a roughly 40× margin, and the ARIMAX speed
 rows above moved with it.
 
 What remains different is the objective, not the precision: we minimise the
@@ -158,13 +180,13 @@ The same Pearson correlation over 200,000 rows:
 
 | | Time |
 |---|---|
-| `runi/stats` | **1.06 ms** |
-| `scipy.stats.pearsonr` | 2.99 ms |
-| SparkML `Correlation.corr`, warm session | 408.7 ms |
-| SparkML, counting session start and import | 3.18 s |
-| SparkML, counting the DataFrame build as well | 10.2 s |
+| `runi/stats` | **0.701 ms** |
+| `scipy.stats.pearsonr` | 5.14 ms |
+| SparkML `Correlation.corr`, warm session | 282.9 ms |
+| SparkML, counting session start and import | 2.57 s |
+| SparkML, counting the DataFrame build as well | 8.46 s |
 
-**387× on compute alone**, and roughly 3,000× once the session start a caller
+**403× on compute alone**, and roughly 3,700× once the session start a caller
 actually pays for is included. Spark earns that overhead back when the data does
 not fit on one machine. At 200,000 rows it does, and the engine spent 7.0
 seconds building a DataFrame for a calculation that takes about a millisecond.

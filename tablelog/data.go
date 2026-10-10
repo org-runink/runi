@@ -8,7 +8,6 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"strings"
 	"sync"
 	"time"
@@ -148,6 +147,13 @@ func (t *Table) writeDataFile(ctx context.Context, rs []row) (fileEntry, error) 
 	return fe, nil
 }
 
+// bodies holds the buffers data-file bodies are read into. A scan reads every
+// live file, and the rows it decodes are copies — no row points into the body
+// it came from — so the buffer is free the moment the file is decoded, and
+// reusing it keeps a scan's allocation proportional to the rows it returns
+// rather than to the files it opened.
+var bodies = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+
 // readDataFile reads one file and resolves ver 0 to the file's add version.
 func (t *Table) readDataFile(ctx context.Context, fe fileEntry) ([]row, error) {
 	rc, err := t.st.Get(ctx, t.root+fe.Path)
@@ -155,11 +161,13 @@ func (t *Table) readDataFile(ctx context.Context, fe fileEntry) ([]row, error) {
 		return nil, fmt.Errorf("tablelog: read %s: %w", fe.Path, err)
 	}
 	defer rc.Close()
-	body, err := io.ReadAll(rc)
-	if err != nil {
+	body := bodies.Get().(*bytes.Buffer)
+	defer bodies.Put(body)
+	body.Reset()
+	if _, err := body.ReadFrom(rc); err != nil {
 		return nil, fmt.Errorf("tablelog: read %s: %w", fe.Path, err)
 	}
-	_, rows, err := avro.ReadOCF(bytes.NewReader(body), unmarshalRow)
+	_, rows, err := avro.ReadOCFBytes(body.Bytes(), unmarshalRow)
 	if err != nil {
 		return nil, fmt.Errorf("%w: decode %s: %v", ErrCorrupt, fe.Path, err)
 	}
