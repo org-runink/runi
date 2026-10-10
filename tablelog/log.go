@@ -9,10 +9,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"math/rand/v2"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/org-runink/runi/avro"
@@ -52,48 +54,76 @@ type logEntry struct {
 type state struct {
 	version int64
 	files   map[string]fileEntry
+
+	// sortedFiles' answer, computed once. A state is immutable, so the order
+	// cannot go stale; every read of the table asks for it, and sorting the
+	// whole live file set per Scan, per Get and per Compact plan is work the
+	// answer to which never changes.
+	sortOnce sync.Once
+	sorted   []fileEntry
 }
 
 func emptyState() *state { return &state{files: map[string]fileEntry{}} }
 
 func (s *state) clone() *state {
-	c := &state{version: s.version, files: make(map[string]fileEntry, len(s.files))}
-	for k, v := range s.files {
-		c.files[k] = v
-	}
-	return c
+	// A fresh zero sync.Once: the clone is about to be mutated by apply, so it
+	// must compute its own order rather than inherit the original's.
+	return &state{version: s.version, files: maps.Clone(s.files)}
 }
 
+// sortedFiles returns the live files ordered by path. The slice is shared with
+// every other caller and memoised, so callers read it and never write to it.
 func (s *state) sortedFiles() []fileEntry {
-	out := make([]fileEntry, 0, len(s.files))
-	for _, f := range s.files {
-		out = append(out, f)
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
-	return out
+	s.sortOnce.Do(func() {
+		out := make([]fileEntry, 0, len(s.files))
+		for _, f := range s.files {
+			out = append(out, f)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+		s.sorted = out
+	})
+	return s.sorted
 }
 
-// apply returns the state after e. It refuses entries that do not chain.
+// apply returns the state after e, leaving s untouched. It refuses entries that
+// do not chain.
 func (s *state) apply(e *logEntry) (*state, error) {
-	if e.Version != s.version+1 || e.Parent != s.version {
-		return nil, fmt.Errorf("%w: entry v%d (parent %d) does not follow v%d", ErrCorrupt, e.Version, e.Parent, s.version)
-	}
 	n := s.clone()
-	n.version = e.Version
-	for _, p := range e.Remove {
-		if _, ok := n.files[p]; !ok {
-			return nil, fmt.Errorf("%w: v%d removes %s, which is not live", ErrCorrupt, e.Version, p)
-		}
-		delete(n.files, p)
-	}
-	for _, f := range e.Add {
-		if _, ok := n.files[f.Path]; ok || !strings.HasPrefix(f.Path, "data/") {
-			return nil, fmt.Errorf("%w: v%d adds %s twice or outside data/", ErrCorrupt, e.Version, f.Path)
-		}
-		f.Version = e.Version
-		n.files[f.Path] = f
+	if err := n.applyHere(e); err != nil {
+		return nil, err
 	}
 	return n, nil
+}
+
+// applyHere applies e to s IN PLACE. It is for a state no one else can see yet
+// — a clone being caught up by a replay — because a state that someone has
+// read is immutable by contract: a snapshot taken at an old version must never
+// change, and a cached head must not change under a concurrent reader. A
+// failed call leaves s half-applied and fit only to be discarded.
+//
+// Replaying in place is what keeps a cold read linear in the log it replays.
+// Cloning the whole live file set per entry made catching up n commits cost
+// n²/2 map inserts, which is exactly the shape of cost that is invisible on a
+// short log and ruinous on a long one.
+func (s *state) applyHere(e *logEntry) error {
+	if e.Version != s.version+1 || e.Parent != s.version {
+		return fmt.Errorf("%w: entry v%d (parent %d) does not follow v%d", ErrCorrupt, e.Version, e.Parent, s.version)
+	}
+	s.version = e.Version
+	for _, p := range e.Remove {
+		if _, ok := s.files[p]; !ok {
+			return fmt.Errorf("%w: v%d removes %s, which is not live", ErrCorrupt, e.Version, p)
+		}
+		delete(s.files, p)
+	}
+	for _, f := range e.Add {
+		if _, ok := s.files[f.Path]; ok || !strings.HasPrefix(f.Path, "data/") {
+			return fmt.Errorf("%w: v%d adds %s twice or outside data/", ErrCorrupt, e.Version, f.Path)
+		}
+		f.Version = e.Version
+		s.files[f.Path] = f
+	}
+	return nil
 }
 
 func (t *Table) logKey(v int64) string { return fmt.Sprintf("%s_log/%020d.json", t.root, v) }
@@ -194,7 +224,10 @@ func (t *Table) loadState(ctx context.Context, target int64) (*state, error) {
 		if err != nil {
 			return nil, err
 		}
-		if s, err = s.apply(e); err != nil {
+		if s == base {
+			s = base.clone() // base is shared; the replay's own copy is not
+		}
+		if err := s.applyHere(e); err != nil {
 			return nil, err
 		}
 	}
@@ -210,6 +243,39 @@ func (t *Table) remember(s *state) {
 	if t.cache == nil || s.version > t.cache.version {
 		t.cache = s
 	}
+}
+
+// speculativeHead returns the state this handle may commit on top of without
+// re-reading the log, or nil. It is set only by a commit this handle won: that
+// is the one thing that proves the handle was at the head, and the proof is
+// still good now unless someone else has committed since — which the atomic
+// create, not this guess, is what detects.
+func (t *Table) speculativeHead() *state {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.atHead {
+		return nil
+	}
+	return t.cache
+}
+
+// wonVersion records that this handle published s, so the next commit may
+// speculate on it.
+func (t *Table) wonVersion(s *state) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.cache == nil || s.version > t.cache.version {
+		t.cache = s
+	}
+	t.atHead = true
+}
+
+// lostSpeculation records that the guessed version was already taken, so the
+// next commit reads the head properly instead of guessing again.
+func (t *Table) lostSpeculation() {
+	t.mu.Lock()
+	t.atHead = false
+	t.mu.Unlock()
 }
 
 // bestCheckpoint picks the checkpoint to start from, 0 for none. At the head it
@@ -325,66 +391,99 @@ type action struct {
 // commit publishes a as the next log version. It retries lost races with
 // jittered exponential backoff; a compaction whose removed files are no longer
 // live returns ErrConflict for the caller to re-plan.
+//
+// # Why the head is guessed first
+//
+// Reading the head is a LIST of the whole log, so a commit that always reads it
+// costs more the more commits a table has already taken — the hundredth commit
+// of a run paying for the ninety-nine before it. A handle that has just won a
+// version does not need to ask: versions are dense, so if version+1 does not
+// exist then version IS the head. Guessing it and letting PutIfAbsent decide
+// turns the uncontended case into one atomic create.
+//
+// The guess cannot publish a wrong version. Winning the create for v+1 proves
+// no one else holds v+1, and therefore (density again) that nothing was
+// committed after v: the cached state is the head state, the conflict check
+// below ran against the real file set, and the entry's parent is right. Losing
+// it costs one create and falls back to reading the head properly — which on
+// an object store is still cheaper than the LIST it replaced.
 func (t *Table) commit(ctx context.Context, a action) (int64, error) {
+	if s := t.speculativeHead(); s != nil {
+		v, won, err := t.attemptCommit(ctx, a, s)
+		if err != nil || won {
+			return v, err
+		}
+		t.lostSpeculation()
+	}
 	for attempt := 0; attempt < t.cfg.maxAttempts; attempt++ {
 		if attempt > 0 {
 			if err := t.backoff(ctx, attempt); err != nil {
 				return 0, err
 			}
 		}
-		for _, f := range a.add {
-			if created, ok := dataFileCreated(f.Path); ok && t.cfg.now().Sub(created) > MaxCommitAge {
-				return 0, fmt.Errorf("%w: %s written %s ago", ErrStaleCommit, f.Path, t.cfg.now().Sub(created))
-			}
-		}
 		s, err := t.loadState(ctx, -1)
 		if err != nil {
 			return 0, err
 		}
-		for _, p := range a.remove {
-			if _, ok := s.files[p]; !ok {
-				return 0, fmt.Errorf("%w: %s already removed by v≤%d", ErrConflict, p, s.version)
-			}
+		v, won, err := t.attemptCommit(ctx, a, s)
+		if err != nil || won {
+			return v, err
 		}
-		e := &logEntry{
-			Version: s.version + 1, Parent: s.version, TS: t.cfg.now().UnixMicro(),
-			Writer: t.writer, Add: a.add, Remove: a.remove, Op: a.op,
-		}
-		if e.Add == nil {
-			e.Add = []fileEntry{}
-		}
-		if e.Remove == nil {
-			e.Remove = []string{}
-		}
-		body, err := marshalLogEntry(e)
-		if err != nil {
-			// Not reachable: logEntry is strings, ints and slices of those.
-			// Checked rather than ignored because the day someone adds a field
-			// that cannot be marshalled, this must fail the commit rather than
-			// write an empty log object.
-			return 0, err
-		}
-		err = t.st.PutIfAbsent(ctx, t.logKey(e.Version), body)
-		if errors.Is(err, ErrExists) {
-			continue // lost the race: re-read the head and try the next version
-		}
-		if err != nil {
-			return 0, fmt.Errorf("tablelog: commit v%d: %w", e.Version, err)
-		}
-		next, err := s.apply(e)
-		if err != nil {
-			return 0, err // cannot happen: e was built from s
-		}
-		t.remember(next)
-		if k := t.cfg.checkpointEvery; k > 0 && next.version%k == 0 {
-			cpErr := t.writeCheckpoint(ctx, next)
-			t.mu.Lock()
-			t.cpErr = cpErr
-			t.mu.Unlock()
-		}
-		return next.version, nil
 	}
 	return 0, fmt.Errorf("%w after %d attempts", ErrRetriesExhausted, t.cfg.maxAttempts)
+}
+
+// attemptCommit tries to publish a as the version after s. won=false with a nil
+// error means the version was already taken and the caller should re-read the
+// head; everything else is final.
+func (t *Table) attemptCommit(ctx context.Context, a action, s *state) (int64, bool, error) {
+	for _, f := range a.add {
+		if created, ok := dataFileCreated(f.Path); ok && t.cfg.now().Sub(created) > MaxCommitAge {
+			return 0, false, fmt.Errorf("%w: %s written %s ago", ErrStaleCommit, f.Path, t.cfg.now().Sub(created))
+		}
+	}
+	for _, p := range a.remove {
+		if _, ok := s.files[p]; !ok {
+			return 0, false, fmt.Errorf("%w: %s already removed by v≤%d", ErrConflict, p, s.version)
+		}
+	}
+	e := &logEntry{
+		Version: s.version + 1, Parent: s.version, TS: t.cfg.now().UnixMicro(),
+		Writer: t.writer, Add: a.add, Remove: a.remove, Op: a.op,
+	}
+	if e.Add == nil {
+		e.Add = []fileEntry{}
+	}
+	if e.Remove == nil {
+		e.Remove = []string{}
+	}
+	body, err := marshalLogEntry(e)
+	if err != nil {
+		// Not reachable: logEntry is strings, ints and slices of those.
+		// Checked rather than ignored because the day someone adds a field
+		// that cannot be marshalled, this must fail the commit rather than
+		// write an empty log object.
+		return 0, false, err
+	}
+	err = t.st.PutIfAbsent(ctx, t.logKey(e.Version), body)
+	if errors.Is(err, ErrExists) {
+		return 0, false, nil // lost the race: the caller re-reads the head
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("tablelog: commit v%d: %w", e.Version, err)
+	}
+	next, err := s.apply(e)
+	if err != nil {
+		return 0, false, err // cannot happen: e was built from s
+	}
+	t.wonVersion(next)
+	if k := t.cfg.checkpointEvery; k > 0 && next.version%k == 0 {
+		cpErr := t.writeCheckpoint(ctx, next)
+		t.mu.Lock()
+		t.cpErr = cpErr
+		t.mu.Unlock()
+	}
+	return next.version, true, nil
 }
 
 func (t *Table) backoff(ctx context.Context, attempt int) error {

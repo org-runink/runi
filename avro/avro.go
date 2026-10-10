@@ -62,11 +62,18 @@ func (e *Encoder) Reset() { e.buf.Reset() }
 func (e *Encoder) Long(v int64) {
 	// zig-zag: map signed to unsigned so small magnitudes stay short.
 	u := uint64((v << 1) ^ (v >> 63))
+	// Built in a stack array and written once. Writing it a byte at a time
+	// paid bytes.Buffer's grow check per byte, and every record here is mostly
+	// varints.
+	var b [maxVarintLen]byte
+	n := 0
 	for u&^0x7f != 0 {
-		e.buf.WriteByte(byte(u&0x7f) | 0x80)
+		b[n] = byte(u&0x7f) | 0x80
 		u >>= 7
+		n++
 	}
-	e.buf.WriteByte(byte(u))
+	b[n] = byte(u)
+	e.buf.Write(b[:n+1])
 }
 
 // Int is Avro int — same wire form as long.
