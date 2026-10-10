@@ -6,7 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -79,7 +79,7 @@ func (t *Table) compactOnce(ctx context.Context) (CompactResult, error) {
 		}
 		out = append(out, r) // r.ver is already resolved to a real version
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].key < out[j].key })
+	slices.SortFunc(out, func(a, b row) int { return strings.Compare(a.key, b.key) })
 
 	a := action{op: opCompact}
 	for _, f := range cands {
