@@ -625,20 +625,20 @@ func (ix *Index) idf(term string) float64 {
 // Ties are broken by document ID so that the same corpus and query always
 // produce the same order — an unstable ranking makes a result impossible to
 // reproduce in a bug report.
-// Scoring used to keep a map of document to score and a SECOND map, of
-// document to a map of term to contribution -- one Go map allocated per
-// document the query touched, to explain a ranking that all but k of them were
-// never going to appear in. Two hundred queries over five thousand documents
-// allocated three hundred thousand maps and sixty megabytes to return two
-// thousand results.
-//
-// Now a document's running score is an entry in a flat slice, and the
-// breakdown is rebuilt for the k documents actually returned by looking each
-// one up in the postings it matched. The arithmetic is unchanged, and
-// deliberately so: a document's contributions are still summed in the order
-// the query listed its terms, which is what makes a score identical to the bit
-// and not merely close.
 func (ix *Index) Search(query string, k int) []Result {
+	// Scoring used to keep a map of document to score and a SECOND map, of
+	// document to a map of term to contribution -- one Go map allocated for
+	// every document the query touched, to explain a ranking that all but k
+	// of them were never going to appear in. Two hundred queries over five
+	// thousand documents allocated three hundred thousand maps and sixty
+	// megabytes, to return two thousand results.
+	//
+	// Now a document's running score is an entry in a flat slice, and the
+	// breakdown is rebuilt for the k documents actually returned by looking
+	// each one up in the postings it matched. The arithmetic is unchanged,
+	// and deliberately so: a document's contributions are still summed in the
+	// order the query listed its terms, which is what makes a score identical
+	// to the bit rather than merely close.
 	terms := ix.terms(query)
 	if len(terms) == 0 || len(ix.docIDs) == 0 {
 		return nil
