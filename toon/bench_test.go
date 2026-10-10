@@ -53,3 +53,18 @@ func BenchmarkDecode(b *testing.B) {
 		}
 	}
 }
+
+func BenchmarkDecodeJSONBaseline(b *testing.B) {
+	jb, err := json.Marshal(benchDoc(2000))
+	if err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		var out map[string]any
+		if err := json.Unmarshal(jb, &out); err != nil {
+			b.Fatal(err)
+		}
+	}
+}

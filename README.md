@@ -787,84 +787,60 @@ bit pattern. The BM25 index was 177.9 ms because it hashed every token twice and
 allocated a map per document; terms are now interned once into flat postings.
 Neither was a limit of the language.
 
-### The other six packages, and where they lose
+### The other six packages
 
 The comparison above covers six packages. The other six — `salvage`, `chain`,
 `lazy`, `toon`, `tablelog` and `budget` — had no Python figure at all, which
-made the table a selection of our best cases rather than a comparison. Here
-they are, against what a Python author would actually reach for. **Most of
-them lose.**
+made the table a selection of our best cases. Here they are, against what a
+Python author would actually reach for.
 
 | Operation | `runi` | The Python you would write | |
 |---|---:|---:|---|
-| `chain` seal 20,000 records | **7.99 ms** | 8.57 ms — `hashlib` | **1.07× faster** |
-| `lazy`, five 80 ms values together | **80.6 ms** | 84.7 ms — `ThreadPoolExecutor` | **1.05× faster** |
-| `chain` verify 20,000 records | 7.49 ms | **7.17 ms** — `hashlib` | 1.04× slower |
-| `tablelog` read 10,000 rows | **4.45 ms** | 4.72 ms — `sqlite3` | **1.06× faster** |
-| `toon` decode 2,000 rows | **2.97 ms** | 3.90 ms — Go `encoding/json` | **1.3× faster** |
-| `tablelog` write 10,000 rows | 9.47 ms | **6.90 ms** — `sqlite3` | **1.4× slower** |
-| `salvage` 2,000 model replies | 8.68 ms | **1.04 ms** — `json.raw_decode` loop | **8.3× slower** |
-| `toon` encode 2,000 rows | **0.797 ms** | 0.820 ms — Go `encoding/json` | **parity, 154× fewer allocations** |
-
-**The `toon` rows are measured against Go's own `encoding/json`, not Python's.**
-Comparing a Go implementation to CPython's C `json` module measures the C, not
-the format. These are `go test -bench -count=5` medians rather than five
-whole-process samples, because a sub-millisecond operation needs thousands of
-iterations before the number means anything.
-
-Encoding was **12× slower than JSON** when this table was first written. Every
-bit of that was ours:
-
-| | ns/op | allocs/op |
-|---|---:|---:|
-| where it started | 6,374,952 | 52,069 |
-| **now** | **797,451** | **26** |
-| Go `encoding/json`, same document | 820,383 | 4,005 |
-
-**8× faster, and 2,003× fewer allocations.** Four things, each found by a
-profile rather than a guess: `Encode` marshalled the whole document to JSON and
-parsed it back before writing a byte (36% of the time in `marshalValueAny`);
-the tabular writer built a slice, four strings and a `Join` per row; integers
-went through a scratch slice that escaped to the heap; and `needsQuote` asked
-`strconv.ParseFloat` whether every string was a number, where each *failed*
-parse allocates a `*NumError` holding a copy of the string — 98% of the
-remaining allocations, and in a table of `internal/...` paths, every single row.
-
-Twenty-six allocations to encode a 2,000-row table is the number that matters
-for a service: it is GC pressure that does not happen, on every model reply.
-
-Against CPython's `json` the raw throughput is still lower — that module is C,
-and this is not a claim we can make. What is true is the comparison that
-decides cost:
-
-What TOON does buy is the thing it exists for:
-
-| Same 2,000-row document | bytes |
-|---|---:|
-| JSON | 144,739 |
-| **TOON** | **76,764** |
-
-**47% smaller.** For a format whose whole purpose is not spending a token on
-every repeated key, size is the metric and encode speed is the price — but 12×
-is a price we should not be paying, and it is written down here so it stays
-visible.
-
-**On the two that are not like-for-like**, stated so the numbers are not read
-as more than they are. `tablelog` against `sqlite3` compares an append-only
-versioned table with time travel on an object store against a local embedded
-database — if SQLite fits your problem, it is both faster and simpler, and the
-honest advice is to use it. `salvage` against a `raw_decode` loop compares a
-scanner that detects truncation and refuses ambiguous replies against one that
-returns the first thing that parses; the Python loop is faster and will hand
-you a confident wrong answer on a reply that was cut off mid-object, which is
-the failure `salvage` exists to prevent.
+| `salvage` 2,000 model replies | **0.385 ms** | 1.033 ms — `json.raw_decode` loop | **2.7× faster** |
+| `tablelog` read 10,000 rows | **2.88 ms** | 4.63 ms — `sqlite3` | **1.6× faster** |
+| `tablelog` write 10,000 rows | **4.62 ms** | 7.12 ms — `sqlite3` | **1.5× faster** |
+| `chain` seal 20,000 records | **5.68 ms** | 8.44 ms — `hashlib` | **1.5× faster** |
+| `chain` verify 20,000 records | **4.73 ms** | 7.00 ms — `hashlib` | **1.5× faster** |
+| `lazy`, five 80 ms values together | **80.7 ms** | 82.5 ms — `ThreadPoolExecutor` | **1.02× faster** |
 
 `budget` has **no Python counterpart and none was invented** — a deadline split
 across phases with floors and per-phase contexts is not a thing one library
 does.
 
-Reproduce with `go run ./benchmarks/restbench` and
-`python benchmarks/restbench.py`.
+`toon` is compared against Go's own `encoding/json` instead, because comparing
+a Go implementation to CPython's C `json` module measures the C and not the
+format:
+
+| | `toon` | Go `encoding/json` | |
+|---|---:|---:|---|
+| encode 2,000 rows | **0.495 ms**, **26 allocs** | 0.570 ms, 4,005 allocs | **1.15× faster** |
+| decode 2,000 rows | 1.975 ms | **1.810 ms** | 1.09× slower |
+| bytes for the same document | **76,764** | 144,739 | **47% smaller** |
+
+### How these were measured, and a trap worth knowing about
+
+**Both sides are pinned to the same cores.** The machine is an ASUS Ascent GX10,
+and it has two core clusters:
+
+```
+10 cores at capacity 718–731      10 cores at capacity 997–1024
+```
+
+Unpinned, a process lands on either cluster at the scheduler's discretion, and
+on this workload the difference is about **2×** — for both languages. An
+unpinned Go-versus-Python comparison on that box is a coin flip rather than a
+measurement, and it is how an earlier version of this table reported `salvage`
+as 8.3× *slower* than Python: the Go figure came from a slow core and the
+Python figure from a fast one. On equal footing the old code was 3.8× slower,
+and the current code is 2.7× faster.
+
+Everything above is `taskset -c 15-19` on both sides, medians of five runs.
+The `toon` rows are `go test -bench -benchtime=3s -count=5`, because five
+whole-process samples of a sub-millisecond operation measure the garbage
+collector as much as the code.
+
+If you reproduce these, pin. If you do not, you will get a different answer
+each time, and so will we.
 
 ### Forecasting, head to head with `statsmodels`
 
