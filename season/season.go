@@ -117,7 +117,7 @@ var ErrTooShort = errors.New("season: series too short")
 // its neighbours by seasonal fit, which settles off-by-one peaks. maxPeriod
 // caps the search; 0 means half the series. NaN values are forward-filled.
 func Period(x []float64, maxPeriod int) int {
-	x = fill(x)
+	x = fillAlias(x)
 	n := len(x)
 	if n < MinPeriodLength {
 		return 0
@@ -266,7 +266,7 @@ type Fourier struct {
 // capped at period/2, the most a period can carry. NaN values are
 // forward-filled.
 func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
-	x = fill(x)
+	x = fillAlias(x)
 	if period < 2 {
 		return Fourier{}, errors.New("season: period must be at least 2")
 	}
@@ -420,7 +420,7 @@ func (f Fourier) Amplitude(k int) float64 {
 // line looks like an improvement, and breaks are invented in smooth data.
 // Segments are at least minSegment points long. NaN values are forward-filled.
 func Changepoints(x []float64, maxK int) []int {
-	x = fill(x)
+	x = fillAlias(x)
 	n := len(x)
 	if n < 2*minSegment || maxK < 1 {
 		return nil
@@ -526,7 +526,7 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	if allNaN(x) {
 		return nil, errors.New("season: series has no values")
 	}
-	y := fill(x)
+	y := fillAlias(x)
 	n := len(y)
 	if opt.Harmonics <= 0 {
 		opt.Harmonics = 3
@@ -1105,6 +1105,20 @@ func sub(a, b []float64) []float64 {
 	return out
 }
 
+// fillAlias is fill for a series that has something to fill, and x itself for
+// one that has not. A series with no NaN in it is its own forward-fill, so the
+// copy fill would make is a copy of nothing — and these are whole-series
+// copies on a path that takes several of them. What comes back must be treated
+// as read-only, since it may be the caller's own slice.
+func fillAlias(x []float64) []float64 {
+	for _, v := range x {
+		if math.IsNaN(v) {
+			return fill(x)
+		}
+	}
+	return x
+}
+
 // fill forward-fills NaN; leading NaNs take the first real value. A series of
 // only NaN is returned as zeros.
 func fill(x []float64) []float64 {
@@ -1253,9 +1267,51 @@ func hampel(v []float64) []float64 {
 	// shift writes one element where a swap writes two, and this inner loop
 	// was two fifths of the whole decomposition.
 	var win [2*hampelHalf + 1]float64
+	half := width / 2
+	clean := true
+	for _, w := range v {
+		if w != w { // NaN, which the shortcut below cannot reason about
+			clean = false
+			break
+		}
+	}
 	for i := range v {
 		lo := min(max(i-hampelHalf, 0), n-width)
-		copy(win[:], v[lo:lo+width])
+		band := v[lo : lo+width]
+		// Most points are not outliers, and for most points the window does
+		// not have to be ordered to prove it. The median is the (half+1)-th
+		// smallest of the window, so it can only fall below v[i]−limit if at
+		// least half+1 of the window does, and only above v[i]+limit if at
+		// least half+1 of the window does. Counting those two is one pass with
+		// no ordering, and when neither reaches half+1 the median is inside
+		// the band, the test cannot fire, and the answer is v[i] — which is
+		// exactly what the sort would have concluded, so this is a proof and
+		// not a guess. On a clean 4,000-point series it settles every point.
+		//
+		// NaN is the one value the argument does not hold for, because it
+		// orders below nothing and above nothing and the insertion sort below
+		// puts it wherever it falls. One anywhere in the series turns the
+		// shortcut off for all of it — asked once, up front, rather than per
+		// window, so that the common case counts two things per point and not
+		// three.
+		vi := v[i]
+		if clean {
+			loEdge, hiEdge := vi-limit, vi+limit
+			below, above := 0, 0
+			for _, w := range band {
+				if w < loEdge {
+					below++
+				}
+				if w > hiEdge {
+					above++
+				}
+			}
+			if below <= half && above <= half {
+				out[i] = vi
+				continue
+			}
+		}
+		copy(win[:], band)
 		for a := 1; a < width; a++ {
 			x, b := win[a], a
 			for ; b > 0 && x < win[b-1]; b-- {

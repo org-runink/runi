@@ -100,6 +100,148 @@ func decomposeRefABC(x []float64, opt Options) (*Decomposition, error) {
 	return d, nil
 }
 
+// hampelRefABC is the outlier filter without the shortcut: every window is
+// copied and ordered, and the median read off, whatever the point looks like.
+// It is the standard the counting fast path has to meet — and it has to meet
+// it exactly, because the fast path is supposed to be a PROOF that the median
+// lies inside the band, not a guess that it probably does.
+func hampelRefABC(v []float64) []float64 {
+	n := len(v)
+	width := 2*hampelHalf + 1
+	if n < width+1 {
+		return v
+	}
+	sigma := noiseSigma(v)
+	if !(sigma > 0) {
+		return v
+	}
+	limit := hampelMADs * sigma
+	out := make([]float64, n)
+	var win [2*hampelHalf + 1]float64
+	for i := range v {
+		lo := min(max(i-hampelHalf, 0), n-width)
+		copy(win[:], v[lo:lo+width])
+		for a := 1; a < width; a++ {
+			x, b := win[a], a
+			for ; b > 0 && x < win[b-1]; b-- {
+				win[b] = win[b-1]
+			}
+			win[b] = x
+		}
+		if med := win[width/2]; math.Abs(v[i]-med) > limit {
+			out[i] = med
+			continue
+		}
+		out[i] = v[i]
+	}
+	return out
+}
+
+// The fast path must change nothing. Over clean series, series with one spike,
+// series with many, and series carrying NaN and Inf — which is where the
+// counting argument stops holding and the window has to be ordered after all —
+// the filter must return the same bits it returned when it ordered every
+// window.
+func TestHampelFastPathMatchesSortABC(t *testing.T) {
+	nan, inf := math.NaN(), math.Inf(1)
+	check := func(name string, v []float64) {
+		t.Helper()
+		got := hampel(append([]float64(nil), v...))
+		want := hampelRefABC(append([]float64(nil), v...))
+		if len(got) != len(want) {
+			t.Fatalf("%s: length %d, want %d", name, len(got), len(want))
+		}
+		for i := range got {
+			if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
+				t.Errorf("%s (n=%d): [%d] = %v, ordering every window gives %v",
+					name, len(v), i, got[i], want[i])
+				return
+			}
+		}
+	}
+	for _, n := range []int{8, 9, 15, 40, 91, 200} {
+		r := rand.New(rand.NewPCG(uint64(n), 61))
+		base := make([]float64, n)
+		for i := range base {
+			base[i] = 100 + 0.5*float64(i) + 10*math.Sin(2*math.Pi*float64(i)/7) + r.NormFloat64()
+		}
+		with := func(name string, f func(x []float64)) {
+			x := append([]float64(nil), base...)
+			f(x)
+			check(name, x)
+		}
+		with("clean", func(x []float64) {})
+		with("one spike", func(x []float64) { x[n/2] += 500 })
+		with("spike down", func(x []float64) { x[n/3] -= 500 })
+		with("spike at 0", func(x []float64) { x[0] += 500 })
+		with("spike at end", func(x []float64) { x[n-1] += 500 })
+		with("many spikes", func(x []float64) {
+			for i := range x {
+				if i%5 == 0 {
+					x[i] += 300
+				}
+			}
+		})
+		with("every point wild", func(x []float64) {
+			for i := range x {
+				x[i] = float64(1-2*(i%2)) * 1e6
+			}
+		})
+		// NaN and Inf: the counting argument does not hold, so these must take
+		// the long way round and still agree.
+		with("one NaN", func(x []float64) { x[n/2] = nan })
+		with("NaN at 0", func(x []float64) { x[0] = nan })
+		with("NaN at end", func(x []float64) { x[n-1] = nan })
+		with("two NaN", func(x []float64) { x[n/3], x[2*n/3] = nan, nan })
+		with("NaN run", func(x []float64) {
+			for i := n / 4; i < n/4+4 && i < n; i++ {
+				x[i] = nan
+			}
+		})
+		with("+Inf", func(x []float64) { x[n/2] = inf })
+		with("-Inf", func(x []float64) { x[n/2] = math.Inf(-1) })
+		with("Inf and NaN", func(x []float64) { x[n/3], x[2*n/3] = inf, nan })
+		with("all NaN", func(x []float64) {
+			for i := range x {
+				x[i] = nan
+			}
+		})
+		with("constant", func(x []float64) {
+			for i := range x {
+				x[i] = 5
+			}
+		})
+	}
+	// And at random, including NaN at a density that puts one in most windows.
+	f := func(seed uint64, raw uint8) bool {
+		n := 8 + int(raw)%120
+		r := rand.New(rand.NewPCG(seed|1, 71))
+		v := make([]float64, n)
+		for i := range v {
+			switch r.IntN(12) {
+			case 0:
+				v[i] = nan
+			case 1:
+				v[i] = math.Inf(1 - 2*r.IntN(2))
+			case 2:
+				v[i] = r.NormFloat64() * 1e4 // an outlier the filter should catch
+			default:
+				v[i] = 100 + r.NormFloat64()
+			}
+		}
+		got, want := hampel(append([]float64(nil), v...)), hampelRefABC(append([]float64(nil), v...))
+		for i := range got {
+			if math.Float64bits(got[i]) != math.Float64bits(want[i]) {
+				return false
+			}
+		}
+		return true
+	}
+	if err := quick.Check(f, &quick.Config{MaxCount: 2000}); err != nil {
+		t.Error(err)
+	}
+}
+
 // medianSortedABC is the median as it was computed: sort a copy, take the
 // middle. It is the standard medianIn has to meet exactly.
 func medianSortedABC(v []float64) float64 {
