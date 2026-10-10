@@ -51,6 +51,7 @@ package bm25
 
 import (
 	"math"
+	"math/bits"
 	"sort"
 	"strings"
 	"unicode"
@@ -130,6 +131,14 @@ type Index struct {
 	// thousand tokens that is the whole cost of building an index, and it also
 	// allocated a map per distinct term. Interning hashes each token's string
 	// once; everything after that is integer-indexed.
+	//
+	// termID is built once, at the end of [New], from the builder's own
+	// interning table: queries are few and a Go map is the fastest thing to
+	// read, while the build is six hundred thousand lookups and wants the
+	// table whose hash it has already computed while splitting the token out
+	// of the document. Every postings slice is a window onto one arena sized
+	// by an exact document-frequency count, so building an index appends to
+	// nothing and copies nothing.
 	termID   map[string]int32
 	postings [][]posting
 }
@@ -178,65 +187,343 @@ func New(docs []Document, opts Options) *Index {
 		opts:    opts,
 		docIDs:  make([]string, len(docs)),
 		lengths: make([]int, len(docs)),
-		termID:  make(map[string]int32),
 	}
 
-	// tf counts this document's terms by id before anything is appended, so a
-	// term repeated inside one document adds one posting rather than one per
-	// occurrence. seen records which ids tf currently holds, so clearing it
-	// costs the number of distinct terms in the document rather than the size
-	// of the vocabulary.
-	var tf []int32
-	var seen []int32
-	var scratch []string
+	b := newBuilder(len(docs), opts.Stopwords)
 	total := 0
-	for i, d := range docs {
+	for i := range docs {
+		d := &docs[i]
 		ix.docIDs[i] = d.ID
-		terms := ix.termsInto(scratch, d.Text)
-		scratch = terms[:0]
-		ix.lengths[i] = len(terms)
-		total += len(terms)
 
-		for _, t := range terms {
-			id, ok := ix.termID[t]
-			if !ok {
-				id = int32(len(ix.postings))
-				ix.termID[t] = id
-				ix.postings = append(ix.postings, nil)
+		var n int
+		if opts.simple {
+			var ok bool
+			if n, ok = b.scanASCII(d.Text); !ok {
+				// Not ASCII: SimpleTokenise has the last word on what a
+				// letter is, and scanASCII has put back everything it
+				// counted so the document is tokenised exactly once.
+				n = b.addTokens(SimpleTokenise(d.Text))
 			}
-			for int(id) >= len(tf) {
-				tf = append(tf, 0)
-			}
-			if tf[id] == 0 {
-				seen = append(seen, id)
-			}
-			tf[id]++
+		} else {
+			n = b.addTokens(opts.Tokenise(d.Text))
 		}
-		for _, id := range seen {
-			ix.postings[id] = append(ix.postings[id], posting{doc: int32(i), tf: tf[id]})
-			tf[id] = 0
-		}
-		seen = seen[:0]
+
+		ix.lengths[i] = n
+		total += n
+		b.endDoc()
 	}
+	b.finish(ix)
+
 	if len(docs) > 0 {
 		ix.avgLen = float64(total) / float64(len(docs))
 	}
 	return ix
 }
 
+// builder holds everything that exists only while an index is being built: the
+// interning table, the current document's term frequencies, and the (term,
+// frequency) pairs each document contributed.
+//
+// Indexing used to cost three passes over every token -- split it out of the
+// text, lower it, then hash it into a map -- and an append into a per-term
+// slice that reallocated as it grew. The builder does one pass: the token's
+// hash falls out of the same loop that finds its boundaries, so a token is
+// read once and hashed once, and the postings are counted before they are
+// placed rather than grown into.
+type builder struct {
+	// slots is open addressing with linear probing: each slot holds an index
+	// into ents, plus one, so that the zero value means empty.
+	slots []int32
+	mask  uint32
+	ents  []entry
+
+	nterm int32 // ids handed out, which excludes stopwords
+
+	tf   []int32 // this document's frequency, by term id
+	seen []int32 // the ids tf currently holds, so clearing is proportional to the document
+	df   []int32 // documents containing each term; reused as a cursor by finish
+
+	// pairs is every (term, frequency) a document contributed, in document
+	// order; docEnd[i] is where document i's run ends. Together they are the
+	// whole postings list before it is sorted by term.
+	pairs  []pair
+	docEnd []int32
+	ndocs  int
+
+	stop map[string]struct{}
+}
+
+// entry is one interned token. The hash is kept so that a probe rejects a
+// collision without touching the string.
+type entry struct {
+	hash uint64
+	term string
+	id   int32 // -1 for a stopword, which is interned so it is recognised once and skipped thereafter
+}
+
+type pair struct {
+	id int32
+	tf int32
+}
+
+func newBuilder(docs int, stop map[string]struct{}) *builder {
+	const initialSlots = 1024
+	return &builder{
+		slots:  make([]int32, initialSlots),
+		mask:   initialSlots - 1,
+		docEnd: make([]int32, 0, docs),
+		ndocs:  docs,
+		stop:   stop,
+	}
+}
+
+// The token hash is a rotate-and-xor over the folded bytes: one instruction per
+// byte on a chain short enough not to stall the scan, and exact -- no two
+// distinct tokens of eight bytes or fewer collide. Longer tokens can collide,
+// which costs a probe and never a wrong answer, because a probe compares the
+// strings.
+func hashString(s string) uint64 {
+	var h uint64
+	for i := 0; i < len(s); i++ {
+		h = bits.RotateLeft64(h, 8) ^ uint64(s[i])
+	}
+	return h
+}
+
+// slot is where a hash starts probing. The multiply is Fibonacci hashing: it
+// folds the whole hash into the high bits, which is what the mask then keeps,
+// so tokens sharing a suffix do not pile into neighbouring slots.
+func (b *builder) slot(h uint64) uint32 {
+	return uint32(h*0x9E3779B97F4A7C15>>32) & b.mask
+}
+
+// add records one occurrence of tok, whose folded hash is h, in the document
+// being built. It reports whether the token counts towards the document's
+// length, which a stopword does not.
+func (b *builder) add(h uint64, tok string) bool {
+	i := b.slot(h)
+	for {
+		e := b.slots[i]
+		if e == 0 {
+			return b.insert(i, h, tok)
+		}
+		if en := &b.ents[e-1]; en.hash == h && en.term == tok {
+			return b.count(en.id)
+		}
+		i = (i + 1) & b.mask
+	}
+}
+
+func (b *builder) count(id int32) bool {
+	if id < 0 {
+		return false // a stopword: ignored entirely, and not part of the length
+	}
+	if b.tf[id] == 0 {
+		b.seen = append(b.seen, id)
+	}
+	b.tf[id]++
+	return true
+}
+
+// insert interns tok at a slot a probe has just found empty.
+func (b *builder) insert(i uint32, h uint64, tok string) bool {
+	id := int32(-1)
+	if _, stop := b.stop[tok]; !stop {
+		id = b.nterm
+		b.nterm++
+		b.tf = append(b.tf, 0)
+		b.df = append(b.df, 0)
+	}
+	b.ents = append(b.ents, entry{hash: h, term: tok, id: id})
+
+	// Keep the table under three-quarters full; past that linear probing
+	// starts walking.
+	if len(b.ents)*4 >= len(b.slots)*3 {
+		b.rehash()
+	} else {
+		b.slots[i] = int32(len(b.ents))
+	}
+	return b.count(id)
+}
+
+func (b *builder) rehash() {
+	b.slots = make([]int32, len(b.slots)*2)
+	b.mask = uint32(len(b.slots)) - 1
+	for k := range b.ents {
+		i := b.slot(b.ents[k].hash)
+		for b.slots[i] != 0 {
+			i = (i + 1) & b.mask
+		}
+		b.slots[i] = int32(k + 1)
+	}
+}
+
+// scanASCII splits s into tokens and records them, hashing each as it goes. It
+// reports false when s holds a byte outside ASCII, having first put back
+// everything it recorded for this document, so the caller can hand the whole
+// document to SimpleTokenise instead and nothing is counted twice.
+//
+// Splitting before lowercasing is safe HERE and only here: over ASCII,
+// lowercasing maps A-Z to a-z and changes nothing about which bytes are
+// letters or digits, so the token boundaries are identical either way. That is
+// not true in general, which is why anything non-ASCII goes the long way.
+func (b *builder) scanASCII(s string) (int, bool) {
+	n := 0
+	for i := 0; i < len(s); {
+		c := s[i]
+		if c >= 0x80 {
+			b.rollback()
+			return 0, false
+		}
+		if !isWordByte(c) {
+			i++
+			continue
+		}
+
+		start := i
+		var h uint64
+		upper := false
+		for ; i < len(s); i++ {
+			c = s[i]
+			if c >= 0x80 {
+				b.rollback()
+				return 0, false
+			}
+			if !isWordByte(c) {
+				break
+			}
+			if c >= 'A' && c <= 'Z' {
+				c += 'a' - 'A'
+				upper = true
+			}
+			h = bits.RotateLeft64(h, 8) ^ uint64(c)
+		}
+
+		tok := s[start:i]
+		if upper {
+			tok = lowerASCII(tok) // the only allocation on this path, and only for text that is not already lower case
+		}
+		if b.add(h, tok) {
+			n++
+		}
+	}
+	return n, true
+}
+
+// addTokens records tokens that something other than scanASCII produced:
+// SimpleTokenise for text that is not ASCII, or a caller's own tokeniser.
+func (b *builder) addTokens(toks []string) int {
+	n := 0
+	for _, t := range toks {
+		if b.add(hashString(t), t) {
+			n++
+		}
+	}
+	return n
+}
+
+// rollback discards the current document's term frequencies, leaving the
+// builder as it was before the document started. Terms it interned stay
+// interned: the document is about to be tokenised again, which produces those
+// same terms again, and a term with no postings scores exactly as one that was
+// never seen.
+func (b *builder) rollback() {
+	for _, id := range b.seen {
+		b.tf[id] = 0
+	}
+	b.seen = b.seen[:0]
+}
+
+// endDoc closes the document, turning its term frequencies into pairs.
+func (b *builder) endDoc() {
+	b.reservePairs(len(b.pairs) + len(b.seen))
+	for _, id := range b.seen {
+		b.pairs = append(b.pairs, pair{id: id, tf: b.tf[id]})
+		b.df[id]++
+		b.tf[id] = 0
+	}
+	b.seen = b.seen[:0]
+	b.docEnd = append(b.docEnd, int32(len(b.pairs)))
+}
+
+// reservePairs makes room for n pairs. Doubling would allocate the postings
+// list twenty times over on the way up and leave twice the corpus behind as
+// garbage, so the size is projected from the documents read so far instead:
+// one document is enough to size the whole corpus to within a few per cent,
+// and a corpus whose documents grow as it goes still doubles at worst.
+func (b *builder) reservePairs(n int) {
+	if n <= cap(b.pairs) {
+		return
+	}
+	size := n
+	if done := len(b.docEnd) + 1; done < b.ndocs {
+		if est := n / done * b.ndocs; est > size {
+			size = est + est/8
+		}
+	}
+	if size < 2*cap(b.pairs) {
+		size = 2 * cap(b.pairs)
+	}
+	grown := make([]pair, len(b.pairs), size)
+	copy(grown, b.pairs)
+	b.pairs = grown
+}
+
+// finish lays the pairs out as postings and hands the index its term lookup.
+//
+// Every term's run is a window onto one arena, placed by a counting sort over
+// the document frequencies already counted, so no postings slice is ever grown
+// and the whole list is one allocation. Documents are walked in order, so each
+// term's postings come out in ascending document order.
+func (b *builder) finish(ix *Index) {
+	n := int(b.nterm)
+
+	ix.termID = make(map[string]int32, n)
+	for k := range b.ents {
+		if e := &b.ents[k]; e.id >= 0 {
+			ix.termID[e.term] = e.id
+		}
+	}
+
+	offs := make([]int32, n+1)
+	var acc int32
+	for id := 0; id < n; id++ {
+		offs[id] = acc
+		acc += b.df[id]
+		b.df[id] = offs[id] // df becomes the cursor into the term's run
+	}
+	offs[n] = acc
+
+	arena := make([]posting, acc)
+	k := 0
+	for doc, end := range b.docEnd {
+		for ; k < int(end); k++ {
+			p := b.pairs[k]
+			arena[b.df[p.id]] = posting{doc: int32(doc), tf: p.tf}
+			b.df[p.id]++
+		}
+	}
+
+	ix.postings = make([][]posting, n)
+	for id := 0; id < n; id++ {
+		ix.postings[id] = arena[offs[id]:offs[id+1]:offs[id+1]]
+	}
+}
+
 // appendTokens is SimpleTokenise writing into a caller-supplied slice, for the
-// ASCII text that nearly all indexed documents are. It reports false and
-// touches nothing when it meets a byte outside ASCII, so the caller falls back
-// to SimpleTokenise and the two can never disagree about unicode.
+// ASCII text that nearly all queries are. It reports false and touches nothing
+// when it meets a byte outside ASCII, so the caller falls back to
+// SimpleTokenise and the two can never disagree about unicode.
 //
 // Splitting before lowercasing is safe HERE and only here: over ASCII,
 // lowercasing maps A-Z to a-z and changes nothing about which bytes are
 // letters or digits, so the token boundaries are identical either way. That is
 // not true in general, which is why anything non-ASCII goes the long way.
 //
-// It exists because tokenising was about 70% of the time to build an index:
-// strings.ToLower scanned every document and strings.FieldsFunc called a
-// closure once per rune.
+// It exists because strings.ToLower scans the whole string and
+// strings.FieldsFunc calls a closure once per rune. Indexing wants the token's
+// hash as well as its bounds and so has its own scanner, [builder.scanASCII];
+// the two agree because both are this loop.
 func appendTokens(dst []string, s string) ([]string, bool) {
 	start := -1
 	for i := 0; i < len(s); i++ {
@@ -289,33 +576,16 @@ func lowerASCII(s string) string {
 	return string(b)
 }
 
-// termsInto is terms() reusing the caller's slice across documents. The tokens
-// are substrings of the document text, so keeping them after the slice is
-// reused is still safe: a string does not alias the slice that carried it.
-func (ix *Index) termsInto(dst []string, text string) []string {
+func (ix *Index) terms(text string) []string {
 	var toks []string
 	if ix.opts.simple {
 		var ok bool
-		if toks, ok = appendTokens(dst[:0], text); !ok {
+		if toks, ok = appendTokens(nil, text); !ok {
 			toks = SimpleTokenise(text)
 		}
 	} else {
 		toks = ix.opts.Tokenise(text)
 	}
-	if len(ix.opts.Stopwords) == 0 {
-		return toks
-	}
-	out := toks[:0]
-	for _, t := range toks {
-		if _, stop := ix.opts.Stopwords[t]; !stop {
-			out = append(out, t)
-		}
-	}
-	return out
-}
-
-func (ix *Index) terms(text string) []string {
-	toks := ix.opts.Tokenise(text)
 	if len(ix.opts.Stopwords) == 0 {
 		return toks
 	}
