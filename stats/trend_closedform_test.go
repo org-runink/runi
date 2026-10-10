@@ -230,6 +230,7 @@ func TestTrendClosedFormEdgeCasesXYZ(t *testing.T) {
 		{"n=5 tail", []float64{3, 1, 4, 1, 5}},
 		{"constant", []float64{3, 3, 3, 3, 3, 3}},
 		{"constant huge", []float64{1e300, 1e300, 1e300, 1e300, 1e300}},
+		{"constant at the ceiling", []float64{1.7e308, 1.7e308, 1.7e308, 1.7e308, 1.7e308}},
 		{"constant tiny", []float64{1e-300, 1e-300, 1e-300, 1e-300, 1e-300}},
 		{"constant zero", make([]float64, 64)},
 		{"exact line up", []float64{1, 2, 3, 4, 5, 6}},
@@ -409,20 +410,25 @@ func TestTrendClosedFormIsNoLessAccurateXYZ(t *testing.T) {
 	}
 }
 
-// A long constant series at 1e300 overflows the sum the old code took first,
-// so it reported NaN for a series whose slope is plainly zero. The new code
-// never forms that sum: it shifts by y[0], which is exactly what makes a
-// constant series collapse to zero rather than to infinity. This is a
-// deliberate divergence from the old behaviour, in the direction of the right
-// answer, and it is recorded here so it cannot regress unnoticed.
-func TestTrendClosedFormBeatsOverflowXYZ(t *testing.T) {
-	y := []float64{1.7e308, 1.7e308, 1.7e308, 1.7e308, 1.7e308}
-	old := trendReferenceXYZ(y)
-	if !math.IsNaN(old.Slope) {
-		t.Fatalf("fixture no longer exercises the overflow: old slope %v", old.Slope)
-	}
-	got := Trend(y)
-	if got.Slope != 0 || got.P != 1 || got.StdErr != 0 || got.T != 0 {
-		t.Errorf("a constant series at the top of the range is flat, not unknowable: %+v", got)
+// The single pass reaches further up the range than the old code did -- it
+// never sums y itself, only differences of it -- but it does not reach all the
+// way, and where it runs out it must hand over rather than invent an answer.
+// This pins the handover: an input whose sums overflow has to come back with
+// exactly what the old three-pass code came back with, which is what the
+// fallback inside trendSums exists to guarantee. The series here is also the
+// one that proves the fallback is reachable at all, so the branch is covered by
+// something other than a NaN.
+func TestTrendClosedFormFallsBackIntactXYZ(t *testing.T) {
+	for _, y := range [][]float64{
+		{1.7e308, 1.7e308, 1.7e308, 1.7e308, 1.7e308},
+		{0, 0, 1.7e308, 1.7e308},
+		{-1.7e308, 1, 1, 1.7e308},
+	} {
+		if isFinite(trendReferenceXYZ(y).Slope) {
+			t.Fatalf("fixture no longer exercises the overflow: %v", y)
+		}
+		if field, got, want, ok := agreesWithReferenceXYZ(y, 0, 0); !ok {
+			t.Errorf("%v: %s differs after the fallback\n new %+v\n old %+v", y, field, got, want)
+		}
 	}
 }

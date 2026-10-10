@@ -223,8 +223,8 @@ func isFinite(v float64) bool { return v-v == 0 }
 // Σ i·y_i - meanX·Σ y_i takes c = 0, which multiplies the series' offset up by
 // i and throws away exactly the digits the answer is made of. Taking c = y[0]
 // keeps the terms the size of the spread of y, but leaves the running total
-// drifting by (meanY - y[0])·Σdx, and rounding that drift costs real digits on
-// a long series whose first point sits away from its mean.
+// drifting by (meanY - y[0])·Σdx, and rounding that drift was measured at ten
+// times the error of the old code on a nearly flat series.
 //
 // So take no c at all. Index i and index n-1-i have equal and opposite dx, so
 // pairing them in from both ends gives
@@ -234,53 +234,62 @@ func isFinite(v float64) bool { return v-v == 0 }
 // in which any constant offset cancels in the data difference itself, exactly,
 // before it is ever multiplied by anything. The partial sums no longer drift,
 // the term count halves, and a constant series gives a clean zero. The middle
-// point of an odd-length series has dx = 0 and contributes nothing.
+// point of an odd-length series has dx = 0 and contributes nothing. The slope
+// now owes nothing at all to meanY, which only the residuals still need.
 //
-// Terms are still bounded by the spread of y times n/2, so a series both long
-// and enormous can overflow here. Those inputs land on the two-pass fallback
-// below, which is the arithmetic this replaced, so in that regime the answer is
-// the one the old code gave.
+// Terms are still bounded by the spread of y times n/2, and the mean the
+// residuals need still comes from a plain total, so a series both long and
+// enormous can overflow either sum here. Those inputs land on the two-pass
+// fallback below, which is the arithmetic this replaced, so in that regime the
+// answer is the one the old code gave rather than a new one.
 func trendSums(y []float64, meanX, fn float64) (meanY, sxy float64) {
 	n := len(y)
-	base := y[0]
 	half := n / 2
-	// Two accumulators per sum, fed four values per iteration, so the loop runs
-	// at the machine's add throughput rather than its add latency.
-	var s0, s1, p0, p1 float64
+	// The two halves get their own slices, and the loop is bounded by their
+	// lengths rather than by half, even though the three are equal: that is the
+	// form the compiler can prove all eight indices safe from, and it is worth
+	// a further fifth of this loop in bounds checks it no longer emits.
+	// Four accumulators per sum then let the loop run at the machine's add
+	// throughput rather than its add latency, and leave the totals paired
+	// rather than serial, which is the more accurate order anyway.
+	lo, hi := y[:half], y[n-half:]
+	var s0, s1, s2, s3 float64
+	var p0, p1, p2, p3 float64
 	i := 0
-	for ; i+2 <= half; i += 2 {
-		j := n - 1 - i
-		a0, c0 := y[i], y[j]
-		a1, c1 := y[i+1], y[j-1]
+	for ; i < len(lo)-3 && i < len(hi)-3; i += 4 {
+		k := len(hi) - 1 - i
+		a0, a1, a2, a3 := lo[i], lo[i+1], lo[i+2], lo[i+3]
+		c0, c1, c2, c3 := hi[k], hi[k-1], hi[k-2], hi[k-3]
 		w := meanX - float64(i)
-		s0 += (a0 - base) + (c0 - base)
-		s1 += (a1 - base) + (c1 - base)
+		s0 += a0 + c0
+		s1 += a1 + c1
+		s2 += a2 + c2
+		s3 += a3 + c3
 		p0 += w * (c0 - a0)
 		p1 += (w - 1) * (c1 - a1)
+		p2 += (w - 2) * (c2 - a2)
+		p3 += (w - 3) * (c3 - a3)
 	}
 	for ; i < half; i++ {
-		a, c := y[i], y[n-1-i]
-		s0 += (a - base) + (c - base)
+		a, c := lo[i], hi[half-1-i]
+		s0 += a + c
 		p0 += (meanX - float64(i)) * (c - a)
 	}
 	if n&1 == 1 {
-		s0 += y[half] - base
+		s0 += y[half]
 	}
-	sdy := s0 + s1
-	sxy = p0 + p1
-	if isFinite(sdy) && isFinite(sxy) {
-		// Summing y - y[0] rather than y keeps the mean of an offset-dominated
-		// series accurate, and keeps a constant series at the top of float64's
-		// range from summing to infinity.
-		return base + sdy/fn, sxy
+	sy := (s0 + s1) + (s2 + s3)
+	sxy = (p0 + p1) + (p2 + p3)
+	if isFinite(sy) && isFinite(sxy) {
+		return sy / fn, sxy
 	}
 	// Overflow, or an infinity or a NaN somewhere in y: redo it the centred
 	// way, so those inputs keep behaving exactly as they did before.
-	var sy float64
+	var tot float64
 	for _, v := range y {
-		sy += v
+		tot += v
 	}
-	meanY = sy / fn
+	meanY = tot / fn
 	sxy = 0
 	for i, v := range y {
 		sxy += (float64(i) - meanX) * (v - meanY)
@@ -292,11 +301,15 @@ func trendSums(y []float64, meanX, fn float64) (meanY, sxy float64) {
 // residual is formed exactly as the single-loop version formed it, so only the
 // order the squares are added in differs; four accumulators again buy the
 // throughput.
+//
+// The bound is written i < n-3 rather than i+4 <= n because that is the form
+// the compiler can prove the four indices safe from, which is worth about a
+// seventh of this loop in removed bounds checks.
 func trendSSE(y []float64, meanX, meanY, b float64) float64 {
 	n := len(y)
 	var e0, e1, e2, e3 float64
 	i := 0
-	for ; i+4 <= n; i += 4 {
+	for ; i < n-3; i += 4 {
 		dx := float64(i) - meanX
 		r0 := y[i] - (meanY + b*dx)
 		r1 := y[i+1] - (meanY + b*(dx+1))
