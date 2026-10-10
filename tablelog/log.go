@@ -71,15 +71,32 @@ func (s *state) clone() *state {
 	return &state{version: s.version, files: maps.Clone(s.files)}
 }
 
-// sortedFiles returns the live files ordered by path. The slice is shared with
-// every other caller and memoised, so callers read it and never write to it.
+// sortedFiles returns the live files in the order they were committed. The
+// slice is shared with every other caller and memoised, so callers read it and
+// never write to it.
+//
+// The order is the commit Version, not the path. A data file is named for the
+// microsecond it was created, so sorting by path USUALLY gives commit order —
+// and silently stops doing so the moment two files share a timestamp, because
+// the rest of the name is random. That is not a theoretical window: it depends
+// on the platform's clock granularity, which on Windows is between 0.5 ms and
+// 15.6 ms, so a fast writer puts several commits inside one tick and they come
+// back in random order. Version is assigned by the log and is exactly the
+// sequence we mean, so it holds however quick the writer is and however coarse
+// the clock. Path breaks ties within a single commit, which keeps the result
+// deterministic rather than map-order.
 func (s *state) sortedFiles() []fileEntry {
 	s.sortOnce.Do(func() {
 		out := make([]fileEntry, 0, len(s.files))
 		for _, f := range s.files {
 			out = append(out, f)
 		}
-		sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
+		sort.Slice(out, func(i, j int) bool {
+			if out[i].Version != out[j].Version {
+				return out[i].Version < out[j].Version
+			}
+			return out[i].Path < out[j].Path
+		})
 		s.sorted = out
 	})
 	return s.sorted
