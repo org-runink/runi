@@ -659,18 +659,50 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	if len(x) < 2*period {
 		return nil, ErrTooShort
 	}
-	if allNaN(x) {
+	// Nothing below WRITES to y, so when the series holds no NaN — which is the
+	// ordinary case — y can be the caller's own slice and the copy fill() would
+	// make is pure waste. Deciding that takes two scans with one test each
+	// rather than one scan with two, because a loop the processor can predict
+	// and a loop it cannot are not the same loop: the first stops at the first
+	// real value, which is index 0 unless the series opens with a gap, and the
+	// second only asks whether a NaN appears anywhere after it.
+	first := -1
+	for i, v := range x {
+		if !math.IsNaN(v) {
+			first = i
+			break
+		}
+	}
+	if first < 0 {
 		return nil, errors.New("season: series has no values")
 	}
-	y := fill(x)
+	y := x
+	if first > 0 {
+		y = fill(x) // leading NaNs: the fill is needed whatever follows
+	} else {
+		for _, v := range x {
+			if math.IsNaN(v) {
+				y = fill(x)
+				break
+			}
+		}
+	}
 	n := len(y)
 	// h is both the half-width of the window and the number of undefined
 	// points at each end: period/2 for an even period, (period−1)/2 for an
 	// odd one, which integer division gives for both.
 	h := period / 2
 	even := period%2 == 0
+	last := n - 1 - h // the last index the centred average is defined at
 
-	trend := make([]float64, n)
+	// The three components are one allocation, sliced three ways. They are
+	// always all three returned and always exactly n long, so three trips
+	// through the allocator buy nothing; each is capped at its own length so
+	// that a caller's append reallocates instead of writing into its
+	// neighbour.
+	buf := make([]float64, 3*n)
+	trend, seas, resid := buf[0:n:n], buf[n:2*n:2*n], buf[2*n:3*n:3*n]
+
 	// The window for index t is the period points y[t−h : t−h+period], plus
 	// the extra half-weighted point y[t+h] when the period is even. Carrying
 	// its sum forward costs two operations per point instead of period, which
@@ -681,22 +713,41 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 	// keeps the rounding error of every addition it ever made, and that error
 	// grows with n while the window's own magnitude does not: on a long series
 	// of large values the drift would eventually show up in the trend, and it
-	// would show up as a slow wander that looks like signal.
+	// would show up as a slow wander that looks like signal. cd counts down to
+	// the next reseed, which is the same schedule as testing s%period but
+	// without a division per point.
+	//
+	// The reseed is not taken as a loop when it falls due, but built a term at
+	// a time across the period points before it, in wn. It is the same period
+	// additions of the same period values in the same order, so the sum is the
+	// same sum down to the bit; what changes is that they no longer sit in one
+	// chain with the running window's own additions. Both are chains of adds
+	// whose every step waits on the one before, and a processor can only run a
+	// chain at one step per add latency however little else it has to do. Two
+	// independent chains it can run at once, so spreading the reseed out costs
+	// the same arithmetic and about half the time.
+	//
+	// wn accumulates y[s+period] at each s, which is exactly the window that
+	// comes due one period later. Past the end of the series there is no such
+	// window: the guard skips those terms, and the sum it leaves unfinished
+	// belongs to a reseed beyond the last defined point, which is never read.
 	w := 0.0
 	for _, v := range y[:period] {
 		w += v
 	}
-	for t := h; t <= n-1-h; t++ {
+	wn, cd := 0.0, period
+	fp := float64(period)
+	for t := h; t <= last; t++ {
 		s := t - h
 		if s > 0 {
-			if s%period == 0 {
-				w = 0
-				for _, v := range y[s : s+period] {
-					w += v
-				}
+			if cd--; cd == 0 {
+				w, wn, cd = wn, 0, period
 			} else {
 				w += y[s+period-1] - y[s-1]
 			}
+		}
+		if s+period < n {
+			wn += y[s+period]
 		}
 		v := w
 		if even {
@@ -705,24 +756,41 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 			// to halve the one it does.
 			v += 0.5 * (y[t+h] - y[t-h])
 		}
-		trend[t] = v / float64(period)
+		trend[t] = v / fp
 	}
 
 	// The season is the mean of the detrended series at each phase of the
-	// cycle, over the indices where the average above is defined.
+	// cycle, over the indices where the average above is defined. The phase is
+	// carried forward and wrapped rather than taken as t%period: the additions
+	// into each phase still happen in increasing t, so the arithmetic is the
+	// same one, done without a division per point.
 	sum := make([]float64, period)
-	cnt := make([]int, period)
-	for t := h; t <= n-1-h; t++ {
-		ph := t % period
+	ph := h % period
+	for t := h; t <= last; t++ {
 		sum[ph] += y[t] - trend[t]
-		cnt[ph]++
+		if ph++; ph == period {
+			ph = 0
+		}
 	}
-	// No phase can be empty: the defined range is n−2h points, which is at
-	// least period long once the series covers two full cycles, and period
-	// consecutive points touch every phase exactly once.
+	// How many points each phase got is arithmetic, not something to count: the
+	// defined range is the m points from h to last, so every phase gets m/period
+	// of them and the first m%period phases STARTING AT h's own phase get one
+	// more. No phase can be empty — the range is at least period long once the
+	// series covers two full cycles, and period consecutive points touch every
+	// phase exactly once.
+	m := last - h + 1
+	base, extra, p0 := m/period, m%period, h%period
 	mean := 0.0
 	for i := range sum {
-		sum[i] /= float64(cnt[i])
+		cnt := base
+		if d := i - p0; d < 0 {
+			if d+period < extra {
+				cnt++
+			}
+		} else if d < extra {
+			cnt++
+		}
+		sum[i] /= float64(cnt)
 		mean += sum[i]
 	}
 	mean /= float64(period)
@@ -738,22 +806,33 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 		trend[t] = trend[h]
 	}
 	for t := n - h; t < n; t++ {
-		trend[t] = trend[n-1-h]
+		trend[t] = trend[last]
 	}
 
-	d := &Decomposition{
+	// The seasonal component is the one cycle repeated, so it is laid down by
+	// copying rather than by indexing a phase per point: one period, then
+	// double the filled region until the series is covered.
+	copy(seas, sum)
+	for f := period; f < n; f *= 2 {
+		copy(seas[f:], seas[:f])
+	}
+	// And the residual is what the two of them leave, in the same order the
+	// phase-indexed form subtracted it: (y − trend) − season. All four slices
+	// are cut to one length so that the compiler can see they are the same
+	// length and drop the bounds check on each of them.
+	ss := seas[:n]
+	ys, ts, rs := y[:len(ss)], trend[:len(ss)], resid[:len(ss)]
+	for t, se := range ss {
+		rs[t] = ys[t] - ts[t] - se
+	}
+
+	return &Decomposition{
 		Period:   period,
 		Trend:    trend,
-		Seasonal: make([]float64, n),
-		Residual: make([]float64, n),
+		Seasonal: seas,
+		Residual: resid,
 		n:        n,
-	}
-	for t := range y {
-		se := sum[t%period]
-		d.Seasonal[t] = se
-		d.Residual[t] = y[t] - trend[t] - se
-	}
-	return d, nil
+	}, nil
 }
 
 func seasonAt(f Fourier, t int) float64 { return f.At(t) }
