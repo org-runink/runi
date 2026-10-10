@@ -177,29 +177,23 @@ func Trend(y []float64) TrendTest {
 	if n < 2 {
 		return out
 	}
-	var sx, sy float64
-	for i, v := range y {
-		sx += float64(i)
-		sy += v
-	}
-	meanX, meanY := sx/float64(n), sy/float64(n)
-	var sxx, sxy float64
-	for i, v := range y {
-		dx := float64(i) - meanX
-		sxx += dx * dx
-		sxy += dx * (v - meanY)
-	}
+	// x is the index 0, 1, …, n-1, so the two x-statistics the fit needs are
+	// known before any data is read: meanX = (n-1)/2, and
+	// sxx = Σ(i - meanX)² = n(n²-1)/12. The closed forms are not only cheaper
+	// than the loop they replace, they are more accurate: meanX is exact, and
+	// sxx rounds once where summing it rounded n times.
+	fn := float64(n)
+	meanX := (fn - 1) * 0.5
+	sxx := fn * (fn*fn - 1) / 12
+
+	meanY, sxy := trendSums(y, meanX, fn)
 	b := sxy / sxx
 	out.Slope = b
 	df := n - 2
 	if df < 1 {
 		return out
 	}
-	var sse float64
-	for i, v := range y {
-		resid := v - (meanY + b*(float64(i)-meanX))
-		sse += resid * resid
-	}
+	sse := trendSSE(y, meanX, meanY, b)
 	if sse <= 0 {
 		if b != 0 {
 			out.T = math.Copysign(math.Inf(1), b)
@@ -212,6 +206,112 @@ func Trend(y []float64) TrendTest {
 	out.T = b / se
 	out.P = TwoSidedP(out.T, df)
 	return out
+}
+
+// isFinite reports whether v is neither infinite nor NaN: v-v is 0 for every
+// finite v and NaN for the rest, which costs one subtract and one compare.
+func isFinite(v float64) bool { return v-v == 0 }
+
+// trendSums returns the mean of y and sxy = Σ(i - meanX)(y_i - meanY) in a
+// single pass, where the centred form needed two.
+//
+// Centring y is what forced the second pass, and it is not needed: Σ(i - meanX)
+// is exactly zero, so Σ(i - meanX)(y_i - c) is the same sxy for every constant
+// c, and the loop can be written to never need meanY at all.
+//
+// Which c is a question about accuracy, not speed. Expanding to the textbook
+// Σ i·y_i - meanX·Σ y_i takes c = 0, which multiplies the series' offset up by
+// i and throws away exactly the digits the answer is made of. Taking c = y[0]
+// keeps the terms the size of the spread of y, but leaves the running total
+// drifting by (meanY - y[0])·Σdx, and rounding that drift costs real digits on
+// a long series whose first point sits away from its mean.
+//
+// So take no c at all. Index i and index n-1-i have equal and opposite dx, so
+// pairing them in from both ends gives
+//
+//	sxy = Σ_{i < n/2} (meanX - i)·(y_{n-1-i} - y_i)
+//
+// in which any constant offset cancels in the data difference itself, exactly,
+// before it is ever multiplied by anything. The partial sums no longer drift,
+// the term count halves, and a constant series gives a clean zero. The middle
+// point of an odd-length series has dx = 0 and contributes nothing.
+//
+// Terms are still bounded by the spread of y times n/2, so a series both long
+// and enormous can overflow here. Those inputs land on the two-pass fallback
+// below, which is the arithmetic this replaced, so in that regime the answer is
+// the one the old code gave.
+func trendSums(y []float64, meanX, fn float64) (meanY, sxy float64) {
+	n := len(y)
+	base := y[0]
+	half := n / 2
+	// Two accumulators per sum, fed four values per iteration, so the loop runs
+	// at the machine's add throughput rather than its add latency.
+	var s0, s1, p0, p1 float64
+	i := 0
+	for ; i+2 <= half; i += 2 {
+		j := n - 1 - i
+		a0, c0 := y[i], y[j]
+		a1, c1 := y[i+1], y[j-1]
+		w := meanX - float64(i)
+		s0 += (a0 - base) + (c0 - base)
+		s1 += (a1 - base) + (c1 - base)
+		p0 += w * (c0 - a0)
+		p1 += (w - 1) * (c1 - a1)
+	}
+	for ; i < half; i++ {
+		a, c := y[i], y[n-1-i]
+		s0 += (a - base) + (c - base)
+		p0 += (meanX - float64(i)) * (c - a)
+	}
+	if n&1 == 1 {
+		s0 += y[half] - base
+	}
+	sdy := s0 + s1
+	sxy = p0 + p1
+	if isFinite(sdy) && isFinite(sxy) {
+		// Summing y - y[0] rather than y keeps the mean of an offset-dominated
+		// series accurate, and keeps a constant series at the top of float64's
+		// range from summing to infinity.
+		return base + sdy/fn, sxy
+	}
+	// Overflow, or an infinity or a NaN somewhere in y: redo it the centred
+	// way, so those inputs keep behaving exactly as they did before.
+	var sy float64
+	for _, v := range y {
+		sy += v
+	}
+	meanY = sy / fn
+	sxy = 0
+	for i, v := range y {
+		sxy += (float64(i) - meanX) * (v - meanY)
+	}
+	return meanY, sxy
+}
+
+// trendSSE returns the residual sum of squares of the fitted line. Each
+// residual is formed exactly as the single-loop version formed it, so only the
+// order the squares are added in differs; four accumulators again buy the
+// throughput.
+func trendSSE(y []float64, meanX, meanY, b float64) float64 {
+	n := len(y)
+	var e0, e1, e2, e3 float64
+	i := 0
+	for ; i+4 <= n; i += 4 {
+		dx := float64(i) - meanX
+		r0 := y[i] - (meanY + b*dx)
+		r1 := y[i+1] - (meanY + b*(dx+1))
+		r2 := y[i+2] - (meanY + b*(dx+2))
+		r3 := y[i+3] - (meanY + b*(dx+3))
+		e0 += r0 * r0
+		e1 += r1 * r1
+		e2 += r2 * r2
+		e3 += r3 * r3
+	}
+	for ; i < n; i++ {
+		r := y[i] - (meanY + b*(float64(i)-meanX))
+		e0 += r * r
+	}
+	return (e0 + e1) + (e2 + e3)
 }
 
 // incompleteBeta is the regularised incomplete beta function I_x(a, b),
