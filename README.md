@@ -859,11 +859,11 @@ identical numbers.
 
 | | `runi/arimax` | `statsmodels` SARIMAX | |
 |---|---:|---:|---|
-| Fit, n=500 | **1.35 ms** | 15.79 ms | **12× faster** |
-| Fit, n=2,000 | **4.25 ms** | 53.79 ms | **13× faster** |
-| Fit, n=10,000 | **18.31 ms** | 267.8 ms | **15× faster** |
-| Per fit over the 200-trial run | **1.58 ms** | 16.32 ms | **10× faster** |
-| Start-up before the first fit | **0 ms** (compiled in) | 676 ms | |
+| Fit, n=500 | **0.917 ms** | 14.58 ms | **15.9× faster** |
+| Fit, n=2,000 | **3.41 ms** | 49.06 ms | **14.4× faster** |
+| Fit, n=10,000 | **12.59 ms** | 239.6 ms | **19.0× faster** |
+| Per fit over the 200-trial run | **1.18 ms** | 15.09 ms | **12.8× faster** |
+| Start-up before the first fit | **0 ms** (compiled in) | 656 ms | |
 | | | | |
 | 95% interval empirical coverage | 94.5% | 94.5% | **identical** |
 | Forecast RMSE, h=6 | 1.31600 | 1.31601 | within **0.001%** |
@@ -885,8 +885,18 @@ in the table.
 generalised-least-squares solve for the coefficients on *prewhitened* data with
 a warm-started refit of the ARMA, until the coefficients stop moving — feasible
 GLS, which is Cochrane–Orcutt generalised from AR(1) errors to ARMA(p,q).
-Fitting became about 3× slower; β went from 0.06662 to 0.03364, against
-statsmodels' 0.03361. The speed rows above are the new ones.
+Fitting became **2.9× slower** and β went from 0.06662 to 0.03364, against
+statsmodels' 0.03361. Both halves of that sentence are measured the same way —
+the commit before GLS (`2ec9885`) and the current one, same generated data, both
+pinned to the same cores: 0.410 ms against 1.178 ms per fit, and at n=500,
+0.282 ms against 0.917 ms.
+
+That is the whole trade, and it is worth stating plainly rather than burying:
+**we gave up two thirds of our speed to halve the error on β** — the
+coefficient you are usually fitting the model *for*. It is still 15–19× faster
+than SARIMAX afterwards, which is why it was the right way round. If you are
+fitting at scale and do not need β to that precision, the staged estimator was
+not wrong, only inefficient, and it was about three times quicker.
 
 What still differs is the objective, not the precision. `arimax` minimises the
 **conditional** sum of squares, which conditions on the first p observations and

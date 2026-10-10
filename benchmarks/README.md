@@ -27,9 +27,9 @@ repetitions.
 
 | Operation | `runi` | Python | Faster by |
 |---|---|---|---|
-| ARIMAX fit, n=500 | **1.35 ms** | 15.79 ms — statsmodels | **12×** |
-| ARIMAX fit, n=2,000 | **4.25 ms** | 53.79 ms — statsmodels | **13×** |
-| ARIMAX fit, n=10,000 | **18.31 ms** | 267.8 ms — statsmodels | **15×** |
+| ARIMAX fit, n=500 | **0.917 ms** | 14.58 ms — statsmodels | **15.9×** |
+| ARIMAX fit, n=2,000 | **3.41 ms** | 49.06 ms — statsmodels | **14.4×** |
+| ARIMAX fit, n=10,000 | **12.59 ms** | 239.6 ms — statsmodels | **19.0×** |
 | OLS trend + t-test, n=100,000 | **0.272 ms** | 8.991 ms — `scipy.stats.linregress` | **33×** |
 | Avro OCF write, 20,000 rows | **1.73 ms** | 15.35 ms — fastavro | **8.9×** |
 | BM25 query ×200, 5,000 docs | **79.0 ms** | 648.5 ms — rank-bm25 | **8.2×** |
