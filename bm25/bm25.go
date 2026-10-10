@@ -200,8 +200,9 @@ func New(docs []Document, opts Options) *Index {
 			var ok bool
 			if n, ok = b.scanASCII(d.Text); !ok {
 				// Not ASCII: SimpleTokenise has the last word on what a
-				// letter is, and scanASCII has put back everything it
-				// counted so the document is tokenised exactly once.
+				// letter is. scanASCII has put back everything it counted
+				// before giving up, so the tokens it already saw are
+				// counted once here and not twice.
 				n = b.addTokens(SimpleTokenise(d.Text))
 			}
 		} else {
