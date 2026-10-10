@@ -3,8 +3,29 @@
 Every case is one both sides genuinely implement. Data is synthetic and
 generated the same way on both sides, with the same sizes, so the numbers are
 comparable rather than suggestive.
+
+**Each library is measured in its own process.** That is not fastidiousness.
+When all of these ran in one interpreter, `scipy.stats.pearsonr` on 200,000
+points measured 0.80 ms if scikit-learn had been imported earlier in the same
+process and 3.3-6.5 ms if it had not -- a factor of four, decided by import
+order rather than by the code being timed. Importing scikit-learn pulls in
+BLAS/OpenMP machinery and warms allocator and page-cache state that the later
+measurements then inherit. A table built that way is not reproducible, and the
+first person to run one section on its own gets a different answer than the
+table claims.
+
+So: `python3 baselines.py` runs every section as a separate subprocess and
+merges the results; `python3 baselines.py <section>` runs exactly one and
+prints it. The fixtures are rebuilt identically in each section, so the data
+every library sees is what it saw before.
+
+Sections: bm25 tfidf scipy season avro
 """
-import io, json, platform, random, statistics, time
+import io, json, os, platform, random, statistics, subprocess, sys, time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+SECTIONS = ["bm25", "tfidf", "scipy", "season", "avro"]
+
 
 def med(f, reps):
     f()                      # warm
@@ -13,18 +34,20 @@ def med(f, reps):
         t = time.perf_counter(); f(); ts.append(time.perf_counter() - t)
     return statistics.median(ts)
 
-res = {"library": "python baselines", "python": platform.python_version(),
-       "machine": platform.machine()}
-rng = random.Random(7)
 
-# ---------- corpus (same shape as the Go side) ----------
-VOCAB = ["term%04d" % i for i in range(2000)]
-docs = [" ".join(rng.choice(VOCAB) for _ in range(120)) for _ in range(5000)]
-queries = [" ".join(rng.choice(VOCAB) for _ in range(3)) for _ in range(200)]
+def corpus():
+    """The shared fixture. Rebuilt per section so each one draws the same
+    numbers from the same generator state the single-process script used."""
+    rng = random.Random(7)
+    VOCAB = ["term%04d" % i for i in range(2000)]
+    docs = [" ".join(rng.choice(VOCAB) for _ in range(120)) for _ in range(5000)]
+    queries = [" ".join(rng.choice(VOCAB) for _ in range(3)) for _ in range(200)]
+    return rng, docs, queries
 
-# ---------- bm25: rank_bm25 ----------
-try:
+
+def sec_bm25(res):
     from rank_bm25 import BM25Okapi
+    _, docs, queries = corpus()
     tok = [d.split() for d in docs]
     qtok = [q.split() for q in queries]
     holder = {}
@@ -35,22 +58,19 @@ try:
         for q in qtok: ix.get_top_n(q, docs, n=10)
     res["bm25_query_s"] = med(query, 3)
     res["bm25_lib"] = "rank_bm25"
-except Exception as e:
-    res["bm25_error"] = str(e)[:120]
 
-# ---------- sklearn TF-IDF, the other thing people use for this ----------
-try:
+
+def sec_tfidf(res):
     from sklearn.feature_extraction.text import TfidfVectorizer
+    _, docs, _ = corpus()
     hold = {}
     def tfidf_fit():
         v = TfidfVectorizer()
         hold["m"] = v.fit_transform(docs); hold["v"] = v
     res["tfidf_index_s"] = med(tfidf_fit, 3)
-except Exception as e:
-    res["tfidf_error"] = str(e)[:120]
 
-# ---------- correlation + trend: scipy ----------
-try:
+
+def sec_scipy(res):
     import numpy as np
     from scipy import stats as sps
     n = 200_000
@@ -63,24 +83,22 @@ try:
     t = 0.001 * np.arange(tn) + np.random.default_rng(13).normal(size=tn)
     res["trend_s"] = med(lambda: sps.linregress(np.arange(tn), t), 5)
     res["trend_n"] = tn
-except Exception as e:
-    res["scipy_error"] = str(e)[:120]
 
-# ---------- seasonal decomposition: statsmodels ----------
-try:
+
+def sec_season(res):
     import numpy as np
     from statsmodels.tsa.seasonal import seasonal_decompose
     sn = 4000
-    s = (100 + 0.05*np.arange(sn) + 10*np.sin(2*np.pi*np.arange(sn)/24)
+    s = (100 + 0.05 * np.arange(sn) + 10 * np.sin(2 * np.pi * np.arange(sn) / 24)
          + np.random.default_rng(17).normal(size=sn))
-    res["season_decompose_s"] = med(lambda: seasonal_decompose(s, period=24, model="additive"), 3)
+    res["season_decompose_s"] = med(
+        lambda: seasonal_decompose(s, period=24, model="additive"), 3)
     res["season_n"] = sn
-except Exception as e:
-    res["statsmodels_season_error"] = str(e)[:120]
 
-# ---------- avro: fastavro ----------
-try:
+
+def sec_avro(res):
     import fastavro
+    rng, _, _ = corpus()
     schema = {"type": "record", "name": "R", "fields": [
         {"name": "name", "type": "string"},
         {"name": "vals", "type": {"type": "array", "items": "double"}}]}
@@ -95,8 +113,40 @@ try:
         list(fastavro.reader(io.BytesIO(buf["b"])))
     res["avro_read_s"] = med(read, 3)
     res["avro_rows"] = len(rows)
-except Exception as e:
-    res["avro_error"] = str(e)[:120]
 
-print(json.dumps(res, indent=2))
-open("results_python_cross.json", "w").write(json.dumps(res, indent=2))
+
+def run_one(name):
+    res = {}
+    try:
+        globals()["sec_" + name](res)
+    except Exception as e:                      # a missing package is a result
+        res[name + "_error"] = str(e)[:120]
+    return res
+
+
+def main():
+    if len(sys.argv) > 1:
+        name = sys.argv[1]
+        if name not in SECTIONS:
+            sys.exit("unknown section %r; want one of %s" % (name, " ".join(SECTIONS)))
+        print(json.dumps(run_one(name), indent=2))
+        return
+
+    res = {"library": "python baselines", "python": platform.python_version(),
+           "machine": platform.machine(), "isolation": "one process per section"}
+    for name in SECTIONS:
+        # The children inherit this process's CPU affinity, so
+        # `taskset ... baselines.py` pins the processes doing the measuring.
+        out = subprocess.run([sys.executable, os.path.abspath(__file__), name],
+                             capture_output=True, text=True, cwd=HERE)
+        if out.returncode != 0:
+            res[name + "_error"] = (out.stderr or "").strip()[:120]
+            continue
+        res.update(json.loads(out.stdout))
+    print(json.dumps(res, indent=2))
+    with open(os.path.join(HERE, "results_python_cross.json"), "w") as fh:
+        fh.write(json.dumps(res, indent=2))
+
+
+if __name__ == "__main__":
+    main()

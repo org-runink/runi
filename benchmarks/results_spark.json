@@ -1,9 +1,9 @@
 {
   "library": "pyspark",
-  "import_s": 0.2617328310152516,
-  "session_start_s": 2.5048498430114705,
-  "dataframe_build_s": 7.0370515230169985,
-  "pearson_s": 0.4087455190019682,
+  "import_s": 0.20674290898023173,
+  "session_start_s": 2.0808568070060574,
+  "dataframe_build_s": 5.8901375750429,
+  "pearson_s": 0.28286166599718854,
   "pearson_n": 200000,
-  "pearson_s_including_startup": 3.1753281930286903
+  "pearson_s_including_startup": 2.5704613819834776
 }
