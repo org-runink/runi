@@ -415,6 +415,28 @@ func TestIndexFlatPostingsHashRoutesAgreeXYZ(t *testing.T) {
 		}
 	}
 
+	// A probe is settled by comparing the strings, so a collision costs a
+	// probe and never a wrong answer -- but a hash that collides often would
+	// turn the table into a list. No two tokens of eight bytes or fewer may
+	// share a hash at all.
+	seen := map[uint64]string{}
+	var gen func(prefix string, depth int)
+	alpha := "aAz09_- "
+	gen = func(prefix string, depth int) {
+		h := hashString(prefix)
+		if other, dup := seen[h]; dup && other != prefix {
+			t.Fatalf("%q and %q share hash %#x", other, prefix, h)
+		}
+		seen[h] = prefix
+		if depth == 0 {
+			return
+		}
+		for _, c := range []byte(alpha) {
+			gen(prefix+string(c), depth-1)
+		}
+	}
+	gen("", 5)
+
 	// The same token reached through scanASCII and through addTokens must come
 	// back as one id, not two.
 	ix := New([]Document{

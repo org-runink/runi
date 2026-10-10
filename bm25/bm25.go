@@ -579,8 +579,10 @@ func lowerASCII(s string) string {
 func (ix *Index) terms(text string) []string {
 	var toks []string
 	if ix.opts.simple {
+		// Queries are a handful of words. Room for eight of them up front
+		// costs one allocation where growing from nothing costs three.
 		var ok bool
-		if toks, ok = appendTokens(nil, text); !ok {
+		if toks, ok = appendTokens(make([]string, 0, 8), text); !ok {
 			toks = SimpleTokenise(text)
 		}
 	} else {
