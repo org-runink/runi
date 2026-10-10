@@ -60,6 +60,7 @@ package stats
 import (
 	"errors"
 	"math"
+	"sync"
 )
 
 // ErrEmpty is returned when a computation has no data to work with.
@@ -502,26 +503,64 @@ func Pearson(x, y []float64) (float64, error) {
 	if len(x) < 2 {
 		return math.NaN(), ErrEmpty
 	}
-	mx, my := Mean(x), Mean(y)
-	var sxy, sxx, syy float64
-	for i := range x {
-		dx, dy := x[i]-mx, y[i]-my
-		sxy += dx * dy
+	// SHIFTED-DATA covariance, in ONE pass over both columns. The obvious
+	// reading — mean x, mean y, then a covariance loop — walks the data three
+	// times, and at a few hundred thousand points the walking is the cost.
+	//
+	// This is NOT the textbook one-pass form sum(xy) - n*xbar*ybar, which
+	// subtracts two huge nearly-equal numbers and loses every significant
+	// digit on a column with a large mean and a small spread. Here every value
+	// is first shifted by a point taken FROM the column, x[0] and y[0], so the
+	// shifted values are bounded by the column's own range and the correction
+	// below cancels at most a factor of n. On 1e9-sized values that differ in
+	// the third decimal it is more accurate than the three-pass version was,
+	// because that version's error was n*(error in the mean)^2.
+	kx, ky := x[0], y[0]
+	y = y[:len(x)] // the lengths are equal; this is what tells the compiler so
+	var sx, sy, sxx, syy, sxy float64
+	for i, xv := range x {
+		dx := xv - kx
+		dy := y[i] - ky
+		sx += dx
+		sy += dy
 		sxx += dx * dx
 		syy += dy * dy
+		sxy += dx * dy
 	}
-	den := math.Sqrt(sxx * syy)
+	n := float64(len(x))
+	// Written as mean*sum rather than sum*sum/n so that no intermediate is
+	// ever larger than the sum of squares it is subtracted from: by
+	// Cauchy-Schwarz (sum dx)^2/n <= sum dx^2, so a column whose squares are
+	// representable can never overflow the correction. Spelt sx*sx/n, a
+	// column of 1e152s overflows that product and reports NaN for data that
+	// has a perfectly good correlation.
+	mx, my := sx/n, sy/n
+	cxx := sxx - mx*sx
+	cyy := syy - my*sy
+	cxy := sxy - mx*sy
+	// Two roots multiplied, not one root of the product: sqrt(cxx*cyy)
+	// overflows to +Inf (reporting 0) on columns around 1e200 and underflows
+	// to 0 (reporting NaN) on columns around 1e-200, where this form is
+	// right. Rounding cannot drive cxx or cyy below zero by enough to matter
+	// -- the correction cancels at most a factor of n -- and if it ever did,
+	// the root is NaN and so is the answer, which is what a column that is
+	// constant to within rounding deserves.
+	den := math.Sqrt(cxx) * math.Sqrt(cyy)
 	if den == 0 {
 		// One of the columns is constant, so it has no direction to correlate
 		// with. NaN rather than 0: "undefined" is not "unrelated".
 		return math.NaN(), nil
 	}
-	return sxy / den, nil
+	return cxy / den, nil
 }
 
 // Spearman is the rank correlation: Pearson applied to the ranks, with ties
 // given their average rank. It detects any monotonic relationship, straight
 // or not.
+//
+// Values that are equal tie, and a tied group takes the average of the ranks
+// it spans. -0 ties with +0, because they are the same number. Every NaN
+// counts as one value, tied with the other NaNs and ranked above every number.
 func Spearman(x, y []float64) (float64, error) {
 	if len(x) != len(y) {
 		return math.NaN(), ErrLengthMismatch
@@ -529,44 +568,209 @@ func Spearman(x, y []float64) (float64, error) {
 	if len(x) < 2 {
 		return math.NaN(), ErrEmpty
 	}
-	return Pearson(ranks(x), ranks(y))
+	// The ranks are never materialised as a []float64 and Pearson is never
+	// called on them. Pearson would walk two more freshly allocated columns
+	// three more times to recover a mean it already knows: the mean rank is
+	// (n+1)/2 whatever the ties, because averaging a tied group leaves the
+	// sum of the ranks at n(n+1)/2. So each column is reduced, as it is
+	// ranked, to d = 2*rank - (n+1) -- twice the rank's deviation from that
+	// mean, doubled so that a half rank is still a whole number -- and the
+	// correlation falls out of the three sums directly. Doubling cancels:
+	// sum(dx*dy) / sqrt(sum(dx^2)*sum(dy^2)) is Pearson's own ratio with a
+	// factor of 4 top and bottom.
+	//
+	// The deviations are integers, so every term and every running total is
+	// an integer too, and float64 carries them exactly up to 2^53 -- which
+	// covers n up to roughly 300,000. Beyond that the sums round like any
+	// other float sum, at a relative error of about n*eps.
+	w := getRankWork(len(x))
+	defer putRankWork(w)
+
+	devX, sxx := w.rankDevs(x)
+	sxy, syy := w.crossDevs(y, devX)
+	den := math.Sqrt(sxx * syy)
+	if den == 0 {
+		// A constant column has no order to correlate with, exactly as it has
+		// no direction for Pearson.
+		return math.NaN(), nil
+	}
+	return sxy / den, nil
 }
 
-// ranks returns the 1-based ranks of x, averaging ranks within tied groups.
-//
-// It sorts by RADIX on the float's bit pattern rather than by comparison.
-// Ranking dominates Spearman, and a comparison sort of n float64s costs
-// n log n comparisons each reached through a function value; a radix sort is
-// a fixed number of linear passes with no comparisons at all. At the sizes
-// correlation is run on — hundreds of thousands of points — that is the
-// difference between being slower than scipy and being faster than it.
-//
-// Stability is not needed: every member of a tied group receives the same
-// averaged rank, so their order among themselves cannot change the result.
-func ranks(x []float64) []float64 {
-	n := len(x)
-	keys := make([]uint64, n)
-	idx := make([]int32, n)
-	for i, v := range x {
-		keys[i] = sortableBits(v)
-		idx[i] = int32(i)
-	}
-	radixSort(keys, idx)
+// rankWork is the scratch one Spearman call reuses for both of its columns:
+// the sort's two key buffers, its two index buffers, and the deviations of
+// the first column. Allocating these per column was a tenth of the run time
+// in page faults and zeroing alone.
+type rankWork struct {
+	keys, tmpK []uint64
+	idx, tmpI  []int32
+	dev        []int32
+}
 
-	out := make([]float64, n)
+// rankPool hands the scratch back between calls. Each worker takes a *rankWork
+// out of the pool and puts it back, so no two goroutines ever hold the same
+// one — the buffers are never shared, only recycled.
+var rankPool sync.Pool
+
+func getRankWork(n int) *rankWork {
+	w, _ := rankPool.Get().(*rankWork)
+	if w == nil {
+		w = &rankWork{}
+	}
+	if cap(w.keys) < n {
+		w.keys = make([]uint64, n)
+		w.tmpK = make([]uint64, n)
+		w.idx = make([]int32, n)
+		w.tmpI = make([]int32, n)
+		w.dev = make([]int32, n)
+	}
+	w.keys, w.tmpK = w.keys[:n], w.tmpK[:n]
+	w.idx, w.tmpI = w.idx[:n], w.tmpI[:n]
+	w.dev = w.dev[:n]
+	return w
+}
+
+func putRankWork(w *rankWork) { rankPool.Put(w) }
+
+// rankDevs ranks x and writes d = 2*rank - (n+1) for each element into the
+// scratch, returning that slice and the sum of d^2.
+func (w *rankWork) rankDevs(x []float64) ([]int32, float64) {
+	n := len(x)
+	keys, idx := w.sortByValue(x)
+	dev := w.dev
+	var sxx float64
 	for i := 0; i < n; {
 		j := i
 		for j+1 < n && keys[j+1] == keys[i] {
 			j++
 		}
-		// Ranks i+1 .. j+1 are tied; they all take the average.
-		avg := (float64(i+1) + float64(j+1)) / 2
-		for k := i; k <= j; k++ {
-			out[idx[k]] = avg
+		// Positions i..j hold tied values, so they share ranks i+1..j+1
+		// averaged: (i+j+2)/2. Doubled and centred that is i+j+1-n, which is
+		// a whole number whether or not the group has an odd size.
+		d := int32(i + j + 1 - n)
+		fd := float64(d)
+		sxx += fd * fd * float64(j-i+1)
+		for t := i; t <= j; t++ {
+			dev[idx[t]] = d
 		}
 		i = j + 1
 	}
-	return out
+	return dev, sxx
+}
+
+// crossDevs ranks y the same way, but never stores its deviations: it folds
+// each one straight into sum(dy^2) and sum(dx*dy) against the deviations x
+// left behind. That is one fewer n-sized array written, read and allocated.
+func (w *rankWork) crossDevs(y []float64, devX []int32) (sxy, syy float64) {
+	n := len(y)
+	keys, idx := w.sortByValue(y)
+	for i := 0; i < n; {
+		j := i
+		for j+1 < n && keys[j+1] == keys[i] {
+			j++
+		}
+		fd := float64(i + j + 1 - n)
+		syy += fd * fd * float64(j-i+1)
+		var acc float64
+		for t := i; t <= j; t++ {
+			acc += float64(devX[idx[t]])
+		}
+		sxy += fd * acc
+		i = j + 1
+	}
+	return sxy, syy
+}
+
+// sortByValue orders x's rank keys ascending, carrying each value's position
+// alongside, and returns the two buffers the result landed in — which may be
+// the scratch pair rather than the primary one.
+//
+// It is a least-significant-digit radix sort over eight 8-bit digits, not a
+// comparison sort: n log n comparisons reached through a function value cost
+// far more than a fixed number of linear passes. Three things make it quick
+// where the obvious version is not:
+//
+//   - All eight digit histograms are counted in the SAME pass that builds the
+//     keys, so the keys are read once rather than once per digit.
+//   - The buffers ping-pong. Nothing is copied back between passes; the
+//     histograms say in advance which passes will run, so the caller is simply
+//     told where the answer ended up.
+//   - A digit that is identical in every key cannot reorder anything, so its
+//     pass is skipped. On columns of ordinary magnitudes that usually removes
+//     two or three of the eight.
+//
+// Stability is not needed: every member of a tied group gets the same rank,
+// so their order among themselves cannot change the result.
+func (w *rankWork) sortByValue(x []float64) ([]uint64, []int32) {
+	n := len(x)
+	keys, idx, tmpK, tmpI := w.keys, w.idx, w.tmpK, w.tmpI
+	var hist [8][256]int32
+	for i, v := range x {
+		k := rankKey(v)
+		keys[i] = k
+		idx[i] = int32(i)
+		hist[0][byte(k)]++
+		hist[1][byte(k>>8)]++
+		hist[2][byte(k>>16)]++
+		hist[3][byte(k>>24)]++
+		hist[4][byte(k>>32)]++
+		hist[5][byte(k>>40)]++
+		hist[6][byte(k>>48)]++
+		hist[7][byte(k>>56)]++
+	}
+	if n == 0 {
+		return keys, idx
+	}
+	for p := 0; p < 8; p++ {
+		shift := uint(p * 8)
+		h := &hist[p]
+		// A permutation does not change which digits are present or how often,
+		// so a histogram counted before the first pass stays correct for every
+		// later one.
+		if h[byte(keys[0]>>shift)] == int32(n) {
+			continue
+		}
+		sum := int32(0)
+		for i, c := range h {
+			h[i] = sum
+			sum += c
+		}
+		for i, k := range keys {
+			b := byte(k >> shift)
+			at := h[b]
+			h[b] = at + 1
+			tmpK[at] = k
+			tmpI[at] = idx[i]
+		}
+		keys, tmpK = tmpK, keys
+		idx, tmpI = tmpI, idx
+	}
+	return keys, idx
+}
+
+// rankKey maps a float64 onto a uint64 whose unsigned order is the value's
+// numeric order. It is [sortableBits] with the two cases where bit patterns
+// and VALUES disagree folded shut, because ranking is about which values are
+// equal:
+//
+//   - -0 and +0 are the same number and must tie, but their bit patterns are
+//     as far apart as the mapping can put them. Ranking them apart is the
+//     classic bug in a radix sort over raw bits, and it is worth a branch.
+//   - NaN has 2^53 bit patterns and no order at all. All of them collapse to
+//     one key above every number, including the infinities, so the NaNs tie
+//     with each other and sit at the top. Left alone, a negative NaN would
+//     have sorted BELOW negative infinity.
+func rankKey(v float64) uint64 {
+	if v != v {
+		return ^uint64(0)
+	}
+	b := math.Float64bits(v)
+	if b == 1<<63 {
+		b = 0
+	}
+	// Flip every bit of a negative, set the sign bit of a positive, branch
+	// free: the arithmetic shift is all ones exactly when the sign bit is set.
+	return b ^ (uint64(int64(b)>>63) | 1<<63)
 }
 
 // sortableBits maps a float64 onto a uint64 whose unsigned order is the
@@ -631,39 +835,5 @@ func radixSortKeys(keys []uint64) {
 		// makes the number of passes odd, and a swap would then leave the
 		// result in the scratch slice instead of the caller's.
 		copy(keys, tmp)
-	}
-}
-
-func radixSort(keys []uint64, idx []int32) {
-	n := len(keys)
-	if n < 2 {
-		return
-	}
-	tmpK := make([]uint64, n)
-	tmpI := make([]int32, n)
-	var count [256]int
-	for shift := uint(0); shift < 64; shift += 8 {
-		for i := range count {
-			count[i] = 0
-		}
-		for _, k := range keys {
-			count[(k>>shift)&0xff]++
-		}
-		if count[(keys[0]>>shift)&0xff] == n {
-			continue // every key shares this byte; the pass would be a copy
-		}
-		sum := 0
-		for i := range count {
-			c := count[i]
-			count[i] = sum
-			sum += c
-		}
-		for i, k := range keys {
-			p := count[(k>>shift)&0xff]
-			count[(k>>shift)&0xff] = p + 1
-			tmpK[p], tmpI[p] = k, idx[i]
-		}
-		copy(keys, tmpK)
-		copy(idx, tmpI)
 	}
 }
