@@ -742,22 +742,28 @@ func (w *rankWork) sortByValue(x []float64) ([]uint64, []uint64) {
 	}
 	packed = sorted
 
-	// Collect the full keys in sorted order, and resolve each run the top 32
-	// bits left tied as it closes. The gather is the only random reading in
-	// the ranking, and it is over an array that stays in cache at these sizes.
-	skeys[0] = keys[uint32(packed[0])]
+	// Give every element a marker that two elements share exactly when their
+	// values tie, so the caller's grouping is one sequential comparison.
+	//
+	// A value alone inside its 32-bit prefix is its own tie group whatever its
+	// remaining bits are, so its marker is just the word it is already
+	// holding -- its index makes it unique, and nothing is looked up. That is
+	// almost every element of a continuous column, and skipping the lookup
+	// for them takes the only random READING out of the ranking. The runs
+	// that do share a prefix are settled by resolveRun, which fetches their
+	// full keys and uses those as the markers: equal within a tie group,
+	// different across one, and never equal to a neighbouring marker, which
+	// carries a different prefix by construction.
 	start := 0
-	for t := 1; t < n; t++ {
-		skeys[t] = keys[uint32(packed[t])]
-		if skeys[t]>>32 != skeys[start]>>32 {
-			if t-start > 1 {
-				resolveRun(packed[start:t], skeys[start:t], spare[start:t])
+	for t := 1; t <= n; t++ {
+		if t == n || packed[t]>>32 != packed[start]>>32 {
+			if t-start == 1 {
+				skeys[start] = packed[start]
+			} else {
+				resolveRun(packed[start:t], skeys[start:t], spare[start:t], keys)
 			}
 			start = t
 		}
-	}
-	if n-start > 1 {
-		resolveRun(packed[start:n], skeys[start:n], spare[start:n])
 	}
 	return skeys, packed
 }
@@ -800,21 +806,28 @@ func radixHigh32(src, dst []uint64, hist *[4][256]int32) []uint64 {
 const runRadixCutoff = 24
 
 // resolveRun orders one run of elements whose keys agree in their top 32 bits,
-// which the sort left in the order they arrived. skeys holds their full keys
-// and packed their indices; spare is scratch of the same length.
+// which the sort left in the order they arrived, and fills skeys with their
+// full keys as the tie markers. packed holds their indices and spare is
+// scratch of the same length.
 //
-// Nothing needs doing in the overwhelmingly common case, which is a run whose
-// keys are all the same value -- that is what a tied group IS, and every
-// repeated value in a column produces one. Only a run holding genuinely
+// Nothing needs reordering in the overwhelmingly common case, which is a run
+// whose keys are all the same value -- that is what a tied group IS, and
+// every repeated value in a column produces one. Only a run holding genuinely
 // different values that happen to share a 32-bit prefix is sorted, on the 32
 // bits the first sort did not look at.
-func resolveRun(packed, skeys, spare []uint64) {
-	first := skeys[0]
-	for _, k := range skeys[1:] {
+func resolveRun(packed, skeys, spare, keys []uint64) {
+	first := keys[uint32(packed[0])]
+	skeys[0] = first
+	uniform := true
+	for i, p := range packed[1:] {
+		k := keys[uint32(p)]
+		skeys[i+1] = k
 		if k != first {
-			sortRun(packed, skeys, spare)
-			return
+			uniform = false
 		}
+	}
+	if !uniform {
+		sortRun(packed, skeys, spare)
 	}
 }
 
