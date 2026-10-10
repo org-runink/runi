@@ -81,7 +81,15 @@ def sec_scipy(res):
     res["pearson_n"] = n
     tn = 100_000
     t = 0.001 * np.arange(tn) + np.random.default_rng(13).normal(size=tn)
-    res["trend_s"] = med(lambda: sps.linregress(np.arange(tn), t), 5)
+    # xs is built ONCE, outside the timed call. It used to be built inside it,
+    # which meant every timed call allocated a fresh 800 KB array -- so the
+    # figure was linregress plus an allocation, measured against a Go side that
+    # builds its series before the timer starts. It was also bimodal: ~0.38 ms
+    # when the allocator could reuse a warm block and ~8.99 ms when the
+    # sections before it had churned memory and each call faulted in its pages.
+    # That is where this table's old "33x" on trend came from.
+    xs = np.arange(tn)
+    res["trend_s"] = med(lambda: sps.linregress(xs, t), 5)
     res["trend_n"] = tn
 
 

@@ -37,13 +37,22 @@
 // 5,000 synthetic documents, 200 queries:
 //
 //	                        bm25    rank_bm25   sklearn TfidfVectorizer
-//	index 5,000 docs      65.4 ms     91.2 ms                  166.7 ms
-//	200 queries           79.0 ms    648.5 ms                         -
+//	index 5,000 docs      19.3 ms     93.5 ms                  171.3 ms
+//	200 queries            3.92 ms   628.3 ms                         -
 //
-// 1.4x faster to index than rank_bm25, 2.6x faster than building a TF-IDF
-// matrix with scikit-learn, and 8.2x faster to query. The index build was
-// itself 177.9 ms until terms were interned once into flat postings instead of
-// being hashed twice per token into a map per document.
+// 4.8x faster to index than rank_bm25, 8.9x faster than building a TF-IDF
+// matrix with scikit-learn, and 160x faster to query.
+//
+// Both numbers are mostly about allocation rather than arithmetic. The build
+// does 65 allocations where it once did 20,031: documents emit (term, count)
+// pairs into one flat buffer, and the postings arena is filled by a counting
+// sort instead of appending to 2,000 separately growing slices. Search does
+// 4,800 where it once did 337,826: the per-document score breakdown is now
+// rebuilt only for the documents actually returned, and the top-k comes off a
+// bounded heap rather than a full sort of every candidate -- which mattered
+// more than it sounds, because on a corpus of equal-length documents nearly
+// every pair of candidates ties on score and the comparison falls through to
+// comparing document IDs.
 //
 // Measured on an ASUS Ascent GX10, 20 cores, aarch64, Go 1.27.2, with
 // rank-bm25 and scikit-learn 1.9.1 on Python 3.12.3.

@@ -58,24 +58,24 @@
 //
 // Classical computes what statsmodels.tsa.seasonal.seasonal_decompose
 // computes, by the same method, and it is FASTER: n=4,000 at period 24 takes
-// 0.0408 ms here against 0.161 ms there, 3.9x faster, with the two agreeing to
+// 0.0213 ms here against 0.1815 ms there, 8.5x faster, with the two agreeing to
 // 2e-13 on a series of magnitude 300 — a few ulps of float64, which is to say
 // they produce the same numbers. That is the like-for-like row, and it is the
 // one to quote.
 //
-// Decompose is SLOWER than seasonal_decompose, and that stays said. Given the
-// same period and with the trend-break search off, n=4,000 takes 1.70 ms here
-// against 0.161 ms there, because it solves two least-squares systems where a
-// moving average takes two additions a point. It is the wrong tool for a
-// decomposition whose period you already know — that is what Classical is for
-// — and the right one for the three things a moving average cannot do at all.
-// Each piece costs what it costs:
+// Decompose used to be 5x SLOWER than seasonal_decompose. It is now slightly
+// faster — 0.155 ms against 0.1815 ms with the same period and the trend-break
+// search off — but it is still doing a different and larger job, solving two
+// least-squares systems where a moving average takes two additions a point. It
+// is the wrong tool for a decomposition whose period you already know — that is
+// what Classical is for — and the right one for the three things a moving
+// average cannot do at all. Each piece costs what it costs:
 //
-//	Classical, period given             0.0408 ms
-//	Decompose, period given, no breaks  1.70 ms
-//	plus the BIC changepoint search     18.4 ms   (the default)
-//	plus detecting the period too       56.0 ms
-//	Period detection on its own         4.38 ms
+//	Classical, period given             0.0213 ms
+//	Decompose, period given, no breaks  0.155 ms
+//	plus the BIC changepoint search     16.9 ms   (the default)
+//	plus detecting the period too       53.5 ms
+//	Period detection on its own         3.54 ms
 //
 // So: a moving average cannot tell you the period, cannot tell you where the
 // trend broke, and cannot extrapolate. Those three are what the extra time
@@ -662,7 +662,7 @@ func (d *Decomposition) Forecast(h int) []float64 {
 //
 // It is O(n) — a running window sum, then one pass to average by phase — where
 // Decompose solves two least-squares systems: n=4,000 at period 24 takes
-// 0.0408 ms against Decompose's 1.70 ms for the same arguments, and 0.161 ms
+// 0.0213 ms against Decompose's 0.155 ms for the same arguments, and 0.1815 ms
 // for seasonal_decompose. It is the fast path when the period is already known.
 //
 // What it does NOT do, and what Decompose is for:
