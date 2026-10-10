@@ -44,11 +44,63 @@ func decode(text string, v any, strict bool) error {
 	if err != nil {
 		return err
 	}
+
+	// A generic destination is filled directly. The marshal-and-unmarshal
+	// below exists so encoding/json can map the document onto a TYPED
+	// destination -- struct tags, custom unmarshalers, numeric conversions --
+	// but when the caller just wants the tree there is nothing for it to map,
+	// and rendering the whole document to JSON only to parse it straight back
+	// was most of Decode's cost.
+	//
+	// jsonKinds matches what encoding/json would have produced, so what the
+	// caller sees is unchanged: integers arrive as float64, exactly as they
+	// would through the round trip.
+	switch dst := v.(type) {
+	case *any:
+		*dst = jsonKinds(doc)
+		return nil
+	case *map[string]any:
+		if m, ok := jsonKinds(doc).(map[string]any); ok {
+			*dst = m
+			return nil
+		}
+		// Shape mismatch: fall through so encoding/json produces its own
+		// UnmarshalTypeError rather than this package inventing one.
+	case *[]any:
+		if a, ok := jsonKinds(doc).([]any); ok {
+			*dst = a
+			return nil
+		}
+	}
+
 	b, err := marshalDoc(doc)
 	if err != nil {
 		return fmt.Errorf("toon: %w", err)
 	}
 	return json.Unmarshal(b, v)
+}
+
+// jsonKinds rewrites a parsed document into the kinds encoding/json produces
+// when it decodes into an `any`: every number becomes a float64. Nothing else
+// changes. It is the reason the fast path above is invisible to callers --
+// including the 2^53 rounding, which Parse avoids and Decode has always had.
+func jsonKinds(v any) any {
+	switch t := v.(type) {
+	case int64:
+		return float64(t)
+	case map[string]any:
+		for k, e := range t {
+			t[k] = jsonKinds(e)
+		}
+		return t
+	case []any:
+		for i, e := range t {
+			t[i] = jsonKinds(e)
+		}
+		return t
+	default:
+		return v
+	}
 }
 
 // Parse returns the document as map[string]any, []any and scalars, for callers

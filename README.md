@@ -801,23 +801,41 @@ them lose.**
 | `lazy`, five 80 ms values together | **80.6 ms** | 84.7 ms — `ThreadPoolExecutor` | **1.05× faster** |
 | `chain` verify 20,000 records | 7.49 ms | **7.17 ms** — `hashlib` | 1.04× slower |
 | `tablelog` read 10,000 rows | 10.6 ms | **4.71 ms** — `sqlite3` | **2.3× slower** |
-| `toon` decode 2,000 rows | 8.06 ms | **3.71 ms** — Go `encoding/json` | **2.2× slower** |
+| `toon` decode 2,000 rows | **2.97 ms** | 3.90 ms — Go `encoding/json` | **1.3× faster** |
 | `tablelog` write 10,000 rows | 47.7 ms | **6.85 ms** — `sqlite3` | **7.0× slower** |
 | `salvage` 2,000 model replies | 8.68 ms | **1.04 ms** — `json.raw_decode` loop | **8.3× slower** |
-| `toon` encode 2,000 rows | 2.08 ms | **1.30 ms** — Go `encoding/json` | **1.6× slower** |
+| `toon` encode 2,000 rows | **0.797 ms** | 0.820 ms — Go `encoding/json` | **parity, 154× fewer allocations** |
 
 **The `toon` rows are measured against Go's own `encoding/json`, not Python's.**
-That is deliberate: comparing a Go implementation to CPython's C `json` module
-measures the C, not the format.
+Comparing a Go implementation to CPython's C `json` module measures the C, not
+the format. These are `go test -bench -count=5` medians rather than five
+whole-process samples, because a sub-millisecond operation needs thousands of
+iterations before the number means anything.
 
-Encoding was **12× slower than JSON** when this table was first written, and
-that was our own doing: `Encode` marshalled the whole document to JSON and
-parsed it back before writing a single byte of TOON. A profile put 36% of the
-time in `marshalValueAny` and another large share in re-parsing it. The round
-trip exists to honour struct tags and custom marshalers — but when the caller
-hands over a tree that is already maps, slices and scalars, there is nothing
-for `encoding/json` to decide, so that case now writes straight out. **12× →
-1.6×**, and allocations fell from 52,069 to 19,628 per encode.
+Encoding was **12× slower than JSON** when this table was first written. Every
+bit of that was ours:
+
+| | ns/op | allocs/op |
+|---|---:|---:|
+| where it started | 6,374,952 | 52,069 |
+| **now** | **797,451** | **26** |
+| Go `encoding/json`, same document | 820,383 | 4,005 |
+
+**8× faster, and 2,003× fewer allocations.** Four things, each found by a
+profile rather than a guess: `Encode` marshalled the whole document to JSON and
+parsed it back before writing a byte (36% of the time in `marshalValueAny`);
+the tabular writer built a slice, four strings and a `Join` per row; integers
+went through a scratch slice that escaped to the heap; and `needsQuote` asked
+`strconv.ParseFloat` whether every string was a number, where each *failed*
+parse allocates a `*NumError` holding a copy of the string — 98% of the
+remaining allocations, and in a table of `internal/...` paths, every single row.
+
+Twenty-six allocations to encode a 2,000-row table is the number that matters
+for a service: it is GC pressure that does not happen, on every model reply.
+
+Against CPython's `json` the raw throughput is still lower — that module is C,
+and this is not a claim we can make. What is true is the comparison that
+decides cost:
 
 What TOON does buy is the thing it exists for:
 
