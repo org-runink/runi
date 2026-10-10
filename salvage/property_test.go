@@ -248,3 +248,119 @@ func TestPropertyFirstIsTheFirstValidScanValue(t *testing.T) {
 		}
 	}
 }
+
+// Scan now jumps: outside a value it goes to the next opening bracket with
+// IndexByte instead of reading the prose a byte at a time, and inside a string
+// literal it goes to the closing quote the same way. Both jumps skip bytes the
+// old loop looked at, and one of those bytes carried meaning -- a quote in the
+// prose, counted for its parity, which is how a reply that stops inside a
+// quotation is reported as truncated. scanReference is the loop as it was, and
+// the property is that the two agree about everything, on any text.
+func scanReference(text string) (vals []Value, truncated bool) {
+	var stack []byte
+	start := -1
+	inString, escaped := false, false
+	looseQuotes := 0
+
+	for i := 0; i < len(text); i++ {
+		c := text[i]
+		if inString {
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+		switch c {
+		case '"':
+			if len(stack) == 0 {
+				looseQuotes++
+				continue
+			}
+			inString = true
+		case '{', '[':
+			if len(stack) == 0 {
+				start = i
+			}
+			stack = append(stack, c)
+		case '}', ']':
+			if len(stack) == 0 {
+				continue
+			}
+			want := byte('}')
+			if stack[len(stack)-1] == '[' {
+				want = ']'
+			}
+			if c != want {
+				stack = stack[:0]
+				start = -1
+				truncated = true
+				continue
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 && start >= 0 {
+				vals = append(vals, Value{JSON: text[start : i+1], Start: start, End: i + 1})
+				start = -1
+			}
+		}
+	}
+	if len(stack) > 0 || looseQuotes%2 == 1 {
+		truncated = true
+	}
+	return vals, truncated
+}
+
+func sameScan(t *testing.T, text string) {
+	t.Helper()
+	got, gotTrunc := Scan(text)
+	want, wantTrunc := scanReference(text)
+	if gotTrunc != wantTrunc {
+		t.Fatalf("truncated = %v, a byte at a time it is %v, for %q", gotTrunc, wantTrunc, text)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("Scan found %d values, a byte at a time it finds %d, for %q", len(got), len(want), text)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("value %d is %+v, a byte at a time it is %+v, for %q", i, got[i], want[i], text)
+		}
+	}
+}
+
+func TestPropertyScanMatchesAByteAtATime(t *testing.T) {
+	r := rand.New(rand.NewPCG(57, 58))
+	// The pieces are chosen for the seams: lone quotes, escaped quotes,
+	// brackets that never close, closers with nothing to close, and real JSON.
+	pieces := []string{`"`, `\"`, `"\\"`, `{`, `}`, `[`, `]`, `{"a":"}"`, ` `,
+		"\n", `abc`, `:`, `,`, `{"a":1}`, `[1,2]`, `{"a":[1,{"b":"]"}]}`,
+		`"unclosed`, `{"a": [}]}`, `\`, `""`}
+	for i := 0; i < 6000; i++ {
+		var b strings.Builder
+		for n := r.IntN(10); n > 0; n-- {
+			if r.IntN(5) == 0 {
+				b.WriteString(randString(r))
+				continue
+			}
+			b.WriteString(pieces[r.IntN(len(pieces))])
+		}
+		text := b.String()
+		sameScan(t, text)
+		// And every prefix of it, which is what a cut-off reply is.
+		if cut := r.IntN(len(text) + 1); cut < len(text) {
+			sameScan(t, text[:cut])
+		}
+	}
+}
+
+// FuzzScan: the jumps and the byte-at-a-time loop agree on arbitrary input.
+func FuzzScan(f *testing.F) {
+	for _, s := range []string{"", `"`, `{"a":"}"}`, `{"a": [}]}`, `x "y {"z":1}`,
+		`{"a":"\\"}`, `[[{}]]`, "{\"a\":\"\\\"", `}{`, `"a" "b" {"c":1}`} {
+		f.Add(s)
+	}
+	f.Fuzz(func(t *testing.T, s string) { sameScan(t, s) })
+}
