@@ -787,6 +787,61 @@ bit pattern. The BM25 index was 177.9 ms because it hashed every token twice and
 allocated a map per document; terms are now interned once into flat postings.
 Neither was a limit of the language.
 
+### The other six packages, and where they lose
+
+The comparison above covers six packages. The other six — `salvage`, `chain`,
+`lazy`, `toon`, `tablelog` and `budget` — had no Python figure at all, which
+made the table a selection of our best cases rather than a comparison. Here
+they are, against what a Python author would actually reach for. **Most of
+them lose.**
+
+| Operation | `runi` | The Python you would write | |
+|---|---:|---:|---|
+| `chain` seal 20,000 records | **7.99 ms** | 8.57 ms — `hashlib` | **1.07× faster** |
+| `lazy`, five 80 ms values together | **80.6 ms** | 84.7 ms — `ThreadPoolExecutor` | **1.05× faster** |
+| `chain` verify 20,000 records | 7.49 ms | **7.17 ms** — `hashlib` | 1.04× slower |
+| `tablelog` read 10,000 rows | 10.6 ms | **4.71 ms** — `sqlite3` | **2.3× slower** |
+| `toon` decode 2,000 rows | 7.27 ms | **2.48 ms** — Go `encoding/json` | **2.9× slower** |
+| `tablelog` write 10,000 rows | 47.7 ms | **6.85 ms** — `sqlite3` | **7.0× slower** |
+| `salvage` 2,000 model replies | 8.68 ms | **1.04 ms** — `json.raw_decode` loop | **8.3× slower** |
+| `toon` encode 2,000 rows | 6.88 ms | **0.57 ms** — Go `encoding/json` | **12× slower** |
+
+**The `toon` rows are measured against Go's own `encoding/json`, not Python's.**
+That is deliberate: comparing a Go implementation to CPython's C `json` module
+measures the C, not the format. Against Go, in the same language and the same
+process, TOON encodes **12× slower than JSON**. That is our encoder, not a
+property of the format, and it is the clearest optimisation target in the
+module.
+
+What TOON does buy is the thing it exists for:
+
+| Same 2,000-row document | bytes |
+|---|---:|
+| JSON | 144,739 |
+| **TOON** | **76,764** |
+
+**47% smaller.** For a format whose whole purpose is not spending a token on
+every repeated key, size is the metric and encode speed is the price — but 12×
+is a price we should not be paying, and it is written down here so it stays
+visible.
+
+**On the two that are not like-for-like**, stated so the numbers are not read
+as more than they are. `tablelog` against `sqlite3` compares an append-only
+versioned table with time travel on an object store against a local embedded
+database — if SQLite fits your problem, it is both faster and simpler, and the
+honest advice is to use it. `salvage` against a `raw_decode` loop compares a
+scanner that detects truncation and refuses ambiguous replies against one that
+returns the first thing that parses; the Python loop is faster and will hand
+you a confident wrong answer on a reply that was cut off mid-object, which is
+the failure `salvage` exists to prevent.
+
+`budget` has **no Python counterpart and none was invented** — a deadline split
+across phases with floors and per-phase contexts is not a thing one library
+does.
+
+Reproduce with `go run ./benchmarks/restbench` and
+`python benchmarks/restbench.py`.
+
 ### Forecasting, head to head with `statsmodels`
 
 Time-series forecasting is Python's home ground, so the useful question is not
