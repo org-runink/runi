@@ -801,17 +801,23 @@ them lose.**
 | `lazy`, five 80 ms values together | **80.6 ms** | 84.7 ms — `ThreadPoolExecutor` | **1.05× faster** |
 | `chain` verify 20,000 records | 7.49 ms | **7.17 ms** — `hashlib` | 1.04× slower |
 | `tablelog` read 10,000 rows | 10.6 ms | **4.71 ms** — `sqlite3` | **2.3× slower** |
-| `toon` decode 2,000 rows | 7.27 ms | **2.48 ms** — Go `encoding/json` | **2.9× slower** |
+| `toon` decode 2,000 rows | 8.06 ms | **3.71 ms** — Go `encoding/json` | **2.2× slower** |
 | `tablelog` write 10,000 rows | 47.7 ms | **6.85 ms** — `sqlite3` | **7.0× slower** |
 | `salvage` 2,000 model replies | 8.68 ms | **1.04 ms** — `json.raw_decode` loop | **8.3× slower** |
-| `toon` encode 2,000 rows | 6.88 ms | **0.57 ms** — Go `encoding/json` | **12× slower** |
+| `toon` encode 2,000 rows | 2.08 ms | **1.30 ms** — Go `encoding/json` | **1.6× slower** |
 
 **The `toon` rows are measured against Go's own `encoding/json`, not Python's.**
 That is deliberate: comparing a Go implementation to CPython's C `json` module
-measures the C, not the format. Against Go, in the same language and the same
-process, TOON encodes **12× slower than JSON**. That is our encoder, not a
-property of the format, and it is the clearest optimisation target in the
-module.
+measures the C, not the format.
+
+Encoding was **12× slower than JSON** when this table was first written, and
+that was our own doing: `Encode` marshalled the whole document to JSON and
+parsed it back before writing a single byte of TOON. A profile put 36% of the
+time in `marshalValueAny` and another large share in re-parsing it. The round
+trip exists to honour struct tags and custom marshalers — but when the caller
+hands over a tree that is already maps, slices and scalars, there is nothing
+for `encoding/json` to decide, so that case now writes straight out. **12× →
+1.6×**, and allocations fell from 52,069 to 19,628 per encode.
 
 What TOON does buy is the thing it exists for:
 

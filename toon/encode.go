@@ -20,14 +20,31 @@ import (
 // saves tokens. Anything else is written as a dash list. Map keys are sorted,
 // so the output of the same value is always the same bytes.
 func Encode(v any) (string, error) {
-	b, err := json.Marshal(v)
-	if err != nil {
-		return "", fmt.Errorf("toon: %w", err)
+	// A document that is ALREADY maps, slices and scalars is written straight
+	// out. The round trip below exists to honour struct tags, omitempty and
+	// custom marshalers by letting encoding/json decide the shape -- but when
+	// the caller hands over a generic tree there is nothing left for it to
+	// decide, and marshalling the whole document to JSON only to parse it back
+	// was costing more than writing the TOON. On a 2,000-row table that was
+	// about 70% of Encode's time and 12x the cost of json.Marshal itself.
+	doc, direct := genericTree(v)
+	if !direct {
+		b, err := json.Marshal(v)
+		if err != nil {
+			return "", fmt.Errorf("toon: %w", err)
+		}
+		doc, err = jsonToValue(b)
+		if err != nil {
+			return "", fmt.Errorf("toon: %w", err)
+		}
 	}
-	doc, err := jsonToValue(b)
-	if err != nil {
-		return "", fmt.Errorf("toon: %w", err)
-	}
+	return encodeGeneric(doc)
+}
+
+// encodeGeneric writes an already-generic document. Encode reaches it by two
+// routes -- directly, or after the marshal-and-reparse -- and both must
+// produce the same bytes; TestPropertyFastPathMatchesTheRoundTrip checks that.
+func encodeGeneric(doc any) (string, error) {
 	if err := checkEncodable(doc, false); err != nil {
 		return "", err
 	}
@@ -68,6 +85,38 @@ func checkEncodable(v any, inList bool) error {
 		}
 	}
 	return nil
+}
+
+// genericTree reports whether v is already a tree of the kinds TOON writes, so
+// the marshal-and-reparse round trip can be skipped. It allocates nothing: it
+// walks the value and answers.
+//
+// Anything else -- a struct, a named map type, a typed slice -- goes the long
+// way, because only encoding/json knows what its tags mean.
+func genericTree(v any) (any, bool) {
+	switch t := v.(type) {
+	case map[string]any:
+		for _, e := range t {
+			if _, ok := genericTree(e); !ok {
+				return nil, false
+			}
+		}
+		return t, true
+	case []any:
+		for _, e := range t {
+			if _, ok := genericTree(e); !ok {
+				return nil, false
+			}
+		}
+		return t, true
+	case nil, bool, string, json.Number,
+		int, int8, int16, int32, int64,
+		uint, uint8, uint16, uint32, uint64,
+		float32, float64:
+		return v, true
+	default:
+		return nil, false
+	}
 }
 
 func writeValue(sb *strings.Builder, v any, depth int) error {
@@ -248,6 +297,35 @@ func formatScalar(v any) string {
 		return strconv.FormatBool(t)
 	case json.Number:
 		return t.String()
+	case int:
+		return strconv.FormatInt(int64(t), 10)
+	case int8:
+		return strconv.FormatInt(int64(t), 10)
+	case int16:
+		return strconv.FormatInt(int64(t), 10)
+	case int32:
+		return strconv.FormatInt(int64(t), 10)
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case uint:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint8:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint16:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint32:
+		return strconv.FormatUint(uint64(t), 10)
+	case uint64:
+		return strconv.FormatUint(t, 10)
+	case float32, float64:
+		// Deferred to encoding/json so a float reads back byte for byte the
+		// same as it would have through the round trip: Go's JSON encoder
+		// switches to exponent form at magnitudes strconv would not.
+		b, err := json.Marshal(t)
+		if err != nil {
+			return quote(fmt.Sprint(t))
+		}
+		return string(b)
 	case string:
 		if needsQuote(t) {
 			return quote(t)

@@ -293,3 +293,38 @@ func TestPropertyTruncationNeverInventsData(t *testing.T) {
 		}
 	}
 }
+
+// The fast path must be invisible. A generic tree now skips the
+// marshal-and-reparse round trip entirely, so the one thing that could go
+// wrong is it producing different bytes from the route it replaced. This
+// encodes every generated document both ways and requires them identical.
+func TestPropertyFastPathMatchesTheRoundTrip(t *testing.T) {
+	r := rand.New(rand.NewPCG(601, 602))
+	for i := 0; i < 4000; i++ {
+		doc := randTopLevel(r)
+
+		fast, ferr := Encode(doc)
+
+		// The long way, forced: marshal and re-parse, exactly as Encode did
+		// before the fast path existed.
+		b, err := json.Marshal(doc)
+		if err != nil {
+			continue
+		}
+		reparsed, err := jsonToValue(b)
+		if err != nil {
+			continue
+		}
+		slow, serr := encodeGeneric(reparsed)
+
+		if (ferr == nil) != (serr == nil) {
+			t.Fatalf("fast err=%v but round-trip err=%v", ferr, serr)
+		}
+		if ferr != nil {
+			continue
+		}
+		if fast != slow {
+			t.Fatalf("fast path differs from the round trip\n--- fast ---\n%s\n--- slow ---\n%s", fast, slow)
+		}
+	}
+}
