@@ -800,9 +800,9 @@ them lose.**
 | `chain` seal 20,000 records | **7.99 ms** | 8.57 ms — `hashlib` | **1.07× faster** |
 | `lazy`, five 80 ms values together | **80.6 ms** | 84.7 ms — `ThreadPoolExecutor` | **1.05× faster** |
 | `chain` verify 20,000 records | 7.49 ms | **7.17 ms** — `hashlib` | 1.04× slower |
-| `tablelog` read 10,000 rows | 10.6 ms | **4.71 ms** — `sqlite3` | **2.3× slower** |
+| `tablelog` read 10,000 rows | **4.45 ms** | 4.72 ms — `sqlite3` | **1.06× faster** |
 | `toon` decode 2,000 rows | **2.97 ms** | 3.90 ms — Go `encoding/json` | **1.3× faster** |
-| `tablelog` write 10,000 rows | 47.7 ms | **6.85 ms** — `sqlite3` | **7.0× slower** |
+| `tablelog` write 10,000 rows | 9.47 ms | **6.90 ms** — `sqlite3` | **1.4× slower** |
 | `salvage` 2,000 model replies | 8.68 ms | **1.04 ms** — `json.raw_decode` loop | **8.3× slower** |
 | `toon` encode 2,000 rows | **0.797 ms** | 0.820 ms — Go `encoding/json` | **parity, 154× fewer allocations** |
 
