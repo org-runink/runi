@@ -135,7 +135,7 @@ func TestPropertyRanksSumIsInvariant(t *testing.T) {
 			// A small alphabet on purpose, so ties are common.
 			x[j] = float64(r.IntN(10))
 		}
-		got := ranks(x)
+		got := ranksSPRK(x)
 		var sum float64
 		for _, v := range got {
 			sum += v
