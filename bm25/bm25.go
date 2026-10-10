@@ -52,7 +52,7 @@ package bm25
 import (
 	"math"
 	"math/bits"
-	"sort"
+	"slices"
 	"strings"
 	"unicode"
 )
@@ -625,53 +625,229 @@ func (ix *Index) idf(term string) float64 {
 // Ties are broken by document ID so that the same corpus and query always
 // produce the same order — an unstable ranking makes a result impossible to
 // reproduce in a bug report.
+// Scoring used to keep a map of document to score and a SECOND map, of
+// document to a map of term to contribution -- one Go map allocated per
+// document the query touched, to explain a ranking that all but k of them were
+// never going to appear in. Two hundred queries over five thousand documents
+// allocated three hundred thousand maps and sixty megabytes to return two
+// thousand results.
+//
+// Now a document's running score is an entry in a flat slice, and the
+// breakdown is rebuilt for the k documents actually returned by looking each
+// one up in the postings it matched. The arithmetic is unchanged, and
+// deliberately so: a document's contributions are still summed in the order
+// the query listed its terms, which is what makes a score identical to the bit
+// and not merely close.
 func (ix *Index) Search(query string, k int) []Result {
 	terms := ix.terms(query)
 	if len(terms) == 0 || len(ix.docIDs) == 0 {
 		return nil
 	}
 
-	scores := make(map[int]float64)
-	contrib := make(map[int]map[string]float64)
-
+	// The query's terms that this index knows, in the order the query gave
+	// them. A term the query repeats appears twice, because scoring it twice
+	// is what the query asked for.
+	var buf [8]match
+	matches := buf[:0]
+	hits := 0
 	for _, term := range terms {
 		id, ok := ix.termID[term]
 		if !ok {
 			continue // a term nobody has contributes nothing
 		}
-		idf := ix.idf(term)
-		for _, p := range ix.postings[id] {
-			doc := int(p.doc)
-			f := float64(p.tf)
-			dl := float64(ix.lengths[doc])
-			norm := 1.0
-			if ix.avgLen > 0 {
-				norm = 1 - ix.opts.B + ix.opts.B*dl/ix.avgLen
-			}
-			s := idf * (f * (ix.opts.K1 + 1)) / (f + ix.opts.K1*norm)
-			scores[doc] += s
-			if contrib[doc] == nil {
-				contrib[doc] = make(map[string]float64)
-			}
-			contrib[doc][term] += s
-		}
+		post := ix.postings[id]
+		hits += len(post)
+		matches = append(matches, match{term: term, idf: ix.idf(term), post: post})
 	}
-
-	out := make([]Result, 0, len(scores))
-	for doc, s := range scores {
-		out = append(out, Result{ID: ix.docIDs[doc], Score: s, Terms: contrib[doc]})
-	}
-	sort.Slice(out, func(a, b int) bool {
-		if out[a].Score != out[b].Score {
-			return out[a].Score > out[b].Score
-		}
-		return out[a].ID < out[b].ID
-	})
-	if len(out) == 0 {
+	if hits == 0 {
 		return nil // nothing matched: nil, like the other no-result paths
 	}
-	if k > 0 && len(out) > k {
-		out = out[:k]
+
+	cands := ix.accumulate(matches, hits)
+	if k > 0 && k < len(cands) {
+		cands = ix.keepBest(cands, k)
+	}
+	slices.SortFunc(cands, ix.compare)
+
+	out := make([]Result, len(cands))
+	for i, c := range cands {
+		out[i] = Result{ID: ix.docIDs[c.doc], Score: c.score, Terms: ix.explain(matches, c.doc)}
 	}
 	return out
+}
+
+// match is one query term the index knows, with everything scoring it needs
+// looked up once rather than once per document.
+type match struct {
+	term string
+	idf  float64
+	post []posting
+}
+
+// cand is a document that matched at least one term, and its running score.
+type cand struct {
+	doc   int32
+	score float64
+}
+
+// denseWhen decides between the two ways of finding a document's running
+// score. A slice indexed by document number is a handful of instructions per
+// posting, but it costs one zeroed entry for every document in the corpus, so
+// it only pays when the query reaches enough of them. A selective query over a
+// large corpus takes the map instead and never walks the corpus at all --
+// without this, searching a million documents for a term that three of them
+// hold would be slower than the map-of-maps this replaced.
+const denseWhen = 64
+
+func (ix *Index) accumulate(matches []match, hits int) []cand {
+	n := len(ix.docIDs)
+	size := hits
+	if size > n {
+		size = n // a document scores once however many terms reach it
+	}
+	cands := make([]cand, 0, size)
+
+	// Written out twice rather than behind an interface, because what has to
+	// be identical between the two is the ORDER the contributions are summed
+	// in, and that is only obvious when both loops are in front of you.
+	if n/denseWhen <= hits {
+		// at[doc] is the candidate's index plus one, so zero means "not
+		// scored yet". Holding the index here rather than the score means
+		// nothing has to be inferred from a score's value, and an int32 is
+		// half the corpus to clear that a float64 would be.
+		at := make([]int32, n)
+		for _, m := range matches {
+			for _, p := range m.post {
+				s := ix.contribution(m.idf, p)
+				if j := at[p.doc]; j != 0 {
+					cands[j-1].score += s
+					continue
+				}
+				cands = append(cands, cand{doc: p.doc, score: s})
+				at[p.doc] = int32(len(cands))
+			}
+		}
+		return cands
+	}
+
+	at := make(map[int32]int32, size)
+	for _, m := range matches {
+		for _, p := range m.post {
+			s := ix.contribution(m.idf, p)
+			if j, scored := at[p.doc]; scored {
+				cands[j].score += s
+				continue
+			}
+			at[p.doc] = int32(len(cands))
+			cands = append(cands, cand{doc: p.doc, score: s})
+		}
+	}
+	return cands
+}
+
+// compare is the ranking order: highest score first, then by document ID so
+// that the same corpus and query always produce the same order. It is the only
+// statement of that order -- the top-k selection below and the final sort both
+// read it, so the two cannot drift apart.
+func (ix *Index) compare(a, b cand) int {
+	if a.score != b.score {
+		if a.score > b.score {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(ix.docIDs[a.doc], ix.docIDs[b.doc])
+}
+
+// keepBest reduces cands to its k best, in no particular order, for the final
+// sort to put straight.
+//
+// A query reaching a thousand documents to return ten does not need the other
+// nine hundred and ninety ordered. The first k candidates become a heap with
+// the WORST of them at the root, so every candidate after that is rejected on
+// one comparison unless it beats the worst one kept. That matters here more
+// than the comparison count suggests: documents of equal length matching a
+// term once score identically, so ordering them falls through to comparing
+// document IDs, and a full sort does that thousands of times per query.
+//
+// The result is the same k the sort-everything-and-cut it replaced would have
+// produced: both take the k best under [Index.compare], which is a total order
+// whenever document IDs are distinct.
+func (ix *Index) keepBest(cands []cand, k int) []cand {
+	best := cands[:k]
+	for i := k/2 - 1; i >= 0; i-- {
+		ix.siftDown(best, i)
+	}
+	for _, c := range cands[k:] {
+		if ix.compare(c, best[0]) < 0 {
+			best[0] = c
+			ix.siftDown(best, 0)
+		}
+	}
+	return best
+}
+
+// siftDown restores the heap at i, where a parent is never better than its
+// children, so the root is the worst candidate kept.
+func (ix *Index) siftDown(heap []cand, i int) {
+	for {
+		worst := i
+		if l := 2*i + 1; l < len(heap) && ix.compare(heap[worst], heap[l]) < 0 {
+			worst = l
+		}
+		if r := 2*i + 2; r < len(heap) && ix.compare(heap[worst], heap[r]) < 0 {
+			worst = r
+		}
+		if worst == i {
+			return
+		}
+		heap[i], heap[worst] = heap[worst], heap[i]
+		i = worst
+	}
+}
+
+// contribution is what one term in one document adds to that document's score:
+// the term's rarity, damped by how often it occurs and by how long the
+// document is.
+func (ix *Index) contribution(idf float64, p posting) float64 {
+	f := float64(p.tf)
+	dl := float64(ix.lengths[p.doc])
+	norm := 1.0
+	if ix.avgLen > 0 {
+		norm = 1 - ix.opts.B + ix.opts.B*dl/ix.avgLen
+	}
+	return idf * (f * (ix.opts.K1 + 1)) / (f + ix.opts.K1*norm)
+}
+
+// explain rebuilds one document's per-term breakdown. Looking the
+// contributions up again beats keeping them: a query scores every document
+// holding any of its terms, and the breakdown for all but the k returned would
+// be built and thrown away. A term the query repeats adds to its entry twice,
+// in query order, exactly as scoring it did.
+func (ix *Index) explain(matches []match, doc int32) map[string]float64 {
+	terms := make(map[string]float64, len(matches))
+	for _, m := range matches {
+		if p, ok := findPosting(m.post, doc); ok {
+			terms[m.term] += ix.contribution(m.idf, p)
+		}
+	}
+	return terms
+}
+
+// findPosting is a binary search for one document in a term's postings, which
+// [builder.finish] leaves in ascending document order.
+func findPosting(post []posting, doc int32) (posting, bool) {
+	lo, hi := 0, len(post)
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		if post[mid].doc < doc {
+			lo = mid + 1
+		} else {
+			hi = mid
+		}
+	}
+	if lo < len(post) && post[lo].doc == doc {
+		return post[lo], true
+	}
+	return posting{}, false
 }

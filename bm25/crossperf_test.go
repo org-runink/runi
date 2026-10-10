@@ -53,3 +53,37 @@ func BenchmarkCrossQueryXYZ(b *testing.B) {
 		}
 	}
 }
+
+// The same queries asking for every hit rather than the top ten: the case that
+// gains least from building a breakdown only for what is returned.
+func BenchmarkCrossQueryAllXYZ(b *testing.B) {
+	docs, queries := crossCorpusXYZ(5000, 120)
+	ix := New(docs, Options{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for _, q := range queries {
+			_ = ix.Search(q, 0)
+		}
+	}
+}
+
+// A selective query over a corpus large enough that a score slice the size of
+// it would cost more than the search does: the case the accumulator switch
+// exists for.
+func BenchmarkCrossQuerySelectiveXYZ(b *testing.B) {
+	docs, _ := crossCorpusXYZ(200000, 12)
+	for i := range docs {
+		if i%20000 == 0 {
+			docs[i].Text += " needle"
+		}
+	}
+	ix := New(docs, Options{})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		for j := 0; j < 200; j++ {
+			_ = ix.Search("needle", 10)
+		}
+	}
+}
