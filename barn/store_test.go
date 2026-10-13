@@ -1,4 +1,4 @@
-package tablelog
+package barn
 
 import (
 	"bytes"

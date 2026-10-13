@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tablelog
+package barn
 
 import (
 	"context"
@@ -33,7 +33,7 @@ func benchFill(b *testing.B, tb *Table) {
 	}
 }
 
-// BenchmarkWrite is restbench's tablelog_write_s: 10,000 rows in 100 commits.
+// BenchmarkWrite is restbench's barn_write_s: 10,000 rows in 100 commits.
 func BenchmarkWrite(b *testing.B) {
 	for b.Loop() {
 		tb, err := Open(NewMemStore(), "bench", "events")
@@ -44,7 +44,7 @@ func BenchmarkWrite(b *testing.B) {
 	}
 }
 
-// BenchmarkRead is restbench's tablelog_read_s: scan 10,000 rows back out of
+// BenchmarkRead is restbench's barn_read_s: scan 10,000 rows back out of
 // the 100 files the write left behind.
 func BenchmarkRead(b *testing.B) {
 	tb, err := Open(NewMemStore(), "bench", "events")

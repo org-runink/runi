@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: LicenseRef-Runink-Proprietary
 // SPDX-FileCopyrightText: 2026 Runink
 
-package tablelog
+package barn
 
 import (
 	"context"

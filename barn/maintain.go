@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tablelog
+package barn
 
 import (
 	"context"
@@ -46,7 +46,7 @@ func (t *Table) Compact(ctx context.Context) (CompactResult, error) {
 		}
 		return res, err
 	}
-	return CompactResult{}, fmt.Errorf("tablelog: compact gave up after %d plans: %w", t.cfg.maxAttempts, lastErr)
+	return CompactResult{}, fmt.Errorf("barn: compact gave up after %d plans: %w", t.cfg.maxAttempts, lastErr)
 }
 
 func (t *Table) compactOnce(ctx context.Context) (CompactResult, error) {
@@ -127,7 +127,7 @@ type VacuumResult struct {
 func (t *Table) Vacuum(ctx context.Context, retention time.Duration) (VacuumResult, error) {
 	var res VacuumResult
 	if retention < MinRetention {
-		return res, fmt.Errorf("tablelog: vacuum retention %s is below the %s minimum", retention, MinRetention)
+		return res, fmt.Errorf("barn: vacuum retention %s is below the %s minimum", retention, MinRetention)
 	}
 	now := t.cfg.now()
 	cutoff := now.Add(-retention)
@@ -158,7 +158,7 @@ func (t *Table) Vacuum(ctx context.Context, retention time.Duration) (VacuumResu
 
 	keys, err := t.st.List(ctx, t.root+"data/")
 	if err != nil {
-		return res, fmt.Errorf("tablelog: list data/: %w", err)
+		return res, fmt.Errorf("barn: list data/: %w", err)
 	}
 	for _, k := range keys {
 		p := strings.TrimPrefix(k, t.root)
@@ -180,7 +180,7 @@ func (t *Table) Vacuum(ctx context.Context, retention time.Duration) (VacuumResu
 			continue
 		}
 		if err := t.st.Delete(ctx, k); err != nil {
-			return res, fmt.Errorf("tablelog: vacuum %s: %w", p, err)
+			return res, fmt.Errorf("barn: vacuum %s: %w", p, err)
 		}
 		res.Deleted = append(res.Deleted, p)
 	}

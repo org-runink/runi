@@ -49,7 +49,7 @@ go get github.com/org-runink/runi
 | [`runi/bm25`](#runibm25--search-without-a-model) | Rank documents by the words they share | **100%** |
 | [`runi/salvage`](#runisalvage--json-out-of-a-models-reply) | Get JSON out of a language model's reply, without guessing | **100%** |
 | [`runi/avro`](#runiavro--apache-avro-without-the-dependency-tree) | Read and write Avro and Avro OCF files | **100%** |
-| [`runi/tablelog`](#runitablelog--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | **100%** |
+| [`runi/barn`](#runibarn--versioned-tables-on-any-object-store) | Append-only versioned tables with time travel, no database | **100%** |
 | [`runi/memo`](#runimemo--memoization-with-single-flight) | Don't compute the same thing twice | **100%** |
 | [`runi/lazy`](#runilazy--deferred-values-you-can-start-early) | Compute it before anyone asks | **100%** |
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
@@ -451,7 +451,7 @@ file and check it on read.
 
 ---
 
-## `runi/tablelog` — versioned tables on any object store
+## `runi/barn` — versioned tables on any object store
 
 An append-only, versioned key/value table that lives entirely on object storage.
 **No database process.** A table is a set of immutable Avro data files plus a
@@ -459,8 +459,8 @@ transaction log, and the only coordination primitive it needs is an atomic
 create.
 
 ```go
-tb, _ := tablelog.Open(store, "acme", "events")
-v, _ := tb.Put(ctx, tablelog.Row{Key: "a", Payload: []byte("hello")})
+tb, _ := barn.Open(store, "acme", "events")
+v, _ := tb.Put(ctx, barn.Row{Key: "a", Payload: []byte("hello")})
 rec, ok, _ := tb.Get(ctx, "a")
 
 snap, _ := tb.Snapshot(ctx, v)      // read the table as it was at version v
@@ -481,7 +481,7 @@ interface — S3, GCS, MinIO, a filesystem, your own service. [`MemStore`] is a
 complete in-memory implementation, which is both the reference and enough to
 run a table in a test with no infrastructure at all.
 
-**tablelog does not encrypt anything.** Whether objects are sealed at rest is a
+**barn does not encrypt anything.** Whether objects are sealed at rest is a
 property of the Store you supply. If you do seal them, bind the ciphertext to
 the object's **key** — keys here encode tenant, table and path, so a data file
 copied into another tenant's prefix then fails to open instead of being served.
@@ -831,15 +831,15 @@ Neither was a limit of the language.
 ### The other six packages
 
 The comparison above covers six packages. The other six — `salvage`, `chain`,
-`lazy`, `toon`, `tablelog` and `budget` — had no Python figure at all, which
+`lazy`, `toon`, `barn` and `budget` — had no Python figure at all, which
 made the table a selection of our best cases. Here they are, against what a
 Python author would actually reach for.
 
 | Operation | `runi` | The Python you would write | |
 |---|---:|---:|---|
 | `salvage` 2,000 model replies | **0.385 ms** | 1.033 ms — `json.raw_decode` loop | **2.7× faster** |
-| `tablelog` read 10,000 rows | **2.88 ms** | 4.63 ms — `sqlite3` | **1.6× faster** |
-| `tablelog` write 10,000 rows | **4.62 ms** | 7.12 ms — `sqlite3` | **1.5× faster** |
+| `barn` read 10,000 rows | **2.88 ms** | 4.63 ms — `sqlite3` | **1.6× faster** |
+| `barn` write 10,000 rows | **4.62 ms** | 7.12 ms — `sqlite3` | **1.5× faster** |
 | `chain` seal 20,000 records | **5.68 ms** | 8.44 ms — `hashlib` | **1.5× faster** |
 | `chain` verify 20,000 records | **4.73 ms** | 7.00 ms — `hashlib` | **1.5× faster** |
 | `lazy`, five 80 ms values together | **80.7 ms** | 82.5 ms — `ThreadPoolExecutor` | **1.02× faster** |
@@ -1200,7 +1200,7 @@ These hold for every generated input, not for the handful a table lists:
 | `season` | `trend + season + residual` **adds up** to the series it split, to the last bit — for `Classical` including the two ends where the moving average does not exist; no component or forecast is ever NaN; a planted sine comes back with its amplitude at every period, which is what pins the even-period window's half weights; the Hampel filter cannot invent a value outside its input and touches under 0.2% of clean noise; a Fourier fit reproduces its own harmonics — which is what pins the phase-bucketed normal equations as an *exact* rewrite of the full ones rather than an approximation |
 | `stats` | Pearson stays in [−1, 1] and is symmetric; it is invariant under rescaling either input; Spearman depends only on order, which is what pins the radix ranking; ranks always sum to n(n+1)/2 |
 | `avro` | Every field type round-trips; `Long` at **all 64 varint boundaries**; doubles and floats **bit for bit**, including NaN and −0; a present empty string stays present; a truncated stream always errors |
-| `tablelog` | The table matches an independent model of its commits; a snapshot taken at an old version **never changes**; compaction preserves every visible row; prefix scans are exact; versions advance one commit at a time |
+| `barn` | The table matches an independent model of its commits; a snapshot taken at an old version **never changes**; compaction preserves every visible row; prefix scans are exact; versions advance one commit at a time |
 | `arimax` | Differencing shortens by exactly `d` and flattens a degree-`d` polynomial; ACF and PACF stay in [−1, 1]; a forecast interval contains its own point estimate and widens with confidence; an exact slope is recovered |
 | `memo` | Capacity is never exceeded; N concurrent callers run the function **once**; errors coalesce but are not cached |
 | `lazy` | Concurrent getters evaluate once; a `Map` chain stays unevaluated until forced; `Map` composes |
