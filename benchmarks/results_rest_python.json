@@ -13,8 +13,8 @@
   "json_encode_s": 0.0006008670316077769,
   "json_bytes": 160739,
   "json_decode_s": 0.0005992199876345694,
-  "tablelog_rows": 10000,
-  "tablelog_write_s": 0.006848086952231824,
-  "tablelog_read_s": 0.004708315012976527,
+  "barn_rows": 10000,
+  "barn_write_s": 0.006848086952231824,
+  "barn_read_s": 0.004708315012976527,
   "budget_note": "no counterpart benchmarked"
 }

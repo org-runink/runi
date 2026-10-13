@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tablelog
+package barn
 
 import (
 	"bytes"
@@ -68,7 +68,7 @@ func (m *MemStore) PutIfAbsent(ctx context.Context, key string, data []byte) err
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.objects[key]; ok {
-		return fmt.Errorf("tablelog: %q: %w", key, ErrExists)
+		return fmt.Errorf("barn: %q: %w", key, ErrExists)
 	}
 	m.objects[key] = append([]byte(nil), data...)
 	return nil
@@ -83,7 +83,7 @@ func (m *MemStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	defer m.mu.RUnlock()
 	b, ok := m.objects[key]
 	if !ok {
-		return nil, fmt.Errorf("tablelog: %q: not found", key)
+		return nil, fmt.Errorf("barn: %q: not found", key)
 	}
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
 }

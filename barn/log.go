@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tablelog
+package barn
 
 import (
 	"bytes"
@@ -154,7 +154,7 @@ func (t *Table) lastKey() string { return t.root + "_checkpoint/_last" }
 func (t *Table) listVersions(ctx context.Context, dir, ext string) ([]int64, error) {
 	keys, err := t.st.List(ctx, t.root+dir)
 	if err != nil {
-		return nil, fmt.Errorf("tablelog: list %s: %w", dir, err)
+		return nil, fmt.Errorf("barn: list %s: %w", dir, err)
 	}
 	var out []int64
 	for _, k := range keys {
@@ -184,7 +184,7 @@ func (t *Table) readObject(ctx context.Context, key string) ([]byte, error) {
 func (t *Table) readLog(ctx context.Context, v int64) (*logEntry, error) {
 	body, err := t.readObject(ctx, t.logKey(v))
 	if err != nil {
-		return nil, fmt.Errorf("tablelog: read log v%d: %w", v, err)
+		return nil, fmt.Errorf("barn: read log v%d: %w", v, err)
 	}
 	var e logEntry
 	if err := json.Unmarshal(body, &e); err != nil {
@@ -319,7 +319,7 @@ func (t *Table) bestCheckpoint(ctx context.Context, target int64, atHead bool) i
 	return best
 }
 
-const checkpointSchema = `{"type":"record","name":"CheckpointFile","namespace":"org.runink.store.tablelog","fields":[` +
+const checkpointSchema = `{"type":"record","name":"CheckpointFile","namespace":"org.runink.store.barn","fields":[` +
 	`{"name":"path","type":"string"},{"name":"rows","type":"long"},` +
 	`{"name":"minKey","type":"string"},{"name":"maxKey","type":"string"},` +
 	`{"name":"bytes","type":"long"},{"name":"dels","type":"long"},{"name":"version","type":"long"}]}`
@@ -487,7 +487,7 @@ func (t *Table) attemptCommit(ctx context.Context, a action, s *state) (int64, b
 		return 0, false, nil // lost the race: the caller re-reads the head
 	}
 	if err != nil {
-		return 0, false, fmt.Errorf("tablelog: commit v%d: %w", e.Version, err)
+		return 0, false, fmt.Errorf("barn: commit v%d: %w", e.Version, err)
 	}
 	next, err := s.apply(e)
 	if err != nil {

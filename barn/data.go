@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-package tablelog
+package barn
 
 import (
 	"bytes"
@@ -43,7 +43,7 @@ func (r row) record() Record {
 	return Record{Key: r.key, Payload: r.payload, Version: r.ver, TS: time.UnixMicro(r.ts).UTC()}
 }
 
-const rowSchema = `{"type":"record","name":"Row","namespace":"org.runink.store.tablelog","fields":[` +
+const rowSchema = `{"type":"record","name":"Row","namespace":"org.runink.store.barn","fields":[` +
 	`{"name":"key","type":"string"},` +
 	`{"name":"op","type":{"type":"enum","name":"Op","symbols":["put","del"]}},` +
 	`{"name":"ts","type":{"type":"long","logicalType":"timestamp-micros"}},` +
@@ -79,7 +79,7 @@ func unmarshalRow(d *avro.Decoder) (row, error) {
 	case 1:
 		r.del = true
 	default:
-		return r, fmt.Errorf("tablelog: bad op %d", op)
+		return r, fmt.Errorf("barn: bad op %d", op)
 	}
 	if r.ts, err = d.Long(); err != nil {
 		return r, err
@@ -127,7 +127,7 @@ func dataFileCreated(path string) (time.Time, bool) {
 func (t *Table) writeDataFile(ctx context.Context, rs []row) (fileEntry, error) {
 	var buf bytes.Buffer
 	if err := writeRowsOCF(&buf, rowSchema, avro.CodecDeflate, rs, marshalRow); err != nil {
-		return fileEntry{}, fmt.Errorf("tablelog: encode: %w", err)
+		return fileEntry{}, fmt.Errorf("barn: encode: %w", err)
 	}
 	fe := fileEntry{Path: t.newDataPath(), Rows: int64(len(rs)), Bytes: int64(buf.Len())}
 	for i, r := range rs {
@@ -142,7 +142,7 @@ func (t *Table) writeDataFile(ctx context.Context, rs []row) (fileEntry, error) 
 		}
 	}
 	if err := t.st.PutIfAbsent(ctx, t.root+fe.Path, buf.Bytes()); err != nil {
-		return fileEntry{}, fmt.Errorf("tablelog: write %s: %w", fe.Path, err)
+		return fileEntry{}, fmt.Errorf("barn: write %s: %w", fe.Path, err)
 	}
 	return fe, nil
 }
@@ -158,14 +158,14 @@ var bodies = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 func (t *Table) readDataFile(ctx context.Context, fe fileEntry) ([]row, error) {
 	rc, err := t.st.Get(ctx, t.root+fe.Path)
 	if err != nil {
-		return nil, fmt.Errorf("tablelog: read %s: %w", fe.Path, err)
+		return nil, fmt.Errorf("barn: read %s: %w", fe.Path, err)
 	}
 	defer rc.Close()
 	body := bodies.Get().(*bytes.Buffer)
 	defer bodies.Put(body)
 	body.Reset()
 	if _, err := body.ReadFrom(rc); err != nil {
-		return nil, fmt.Errorf("tablelog: read %s: %w", fe.Path, err)
+		return nil, fmt.Errorf("barn: read %s: %w", fe.Path, err)
 	}
 	_, rows, err := avro.ReadOCFBytes(body.Bytes(), unmarshalRow)
 	if err != nil {

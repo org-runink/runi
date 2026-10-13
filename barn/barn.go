@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: BSD-3-Clause
 
-// Package tablelog is an append-only, versioned key/value table kept entirely on
+// Package barn is an append-only, versioned key/value table kept entirely on
 // the object store — the Delta/Iceberg ("Snowflake/Databricks-style") pattern,
 // scaled down to application metadata. There is no database process: a table is
 // a set of immutable Avro data files plus a transaction log of JSON entries, and
@@ -38,7 +38,7 @@
 //
 // # Encryption is the Store's business, not this package's
 //
-// tablelog does not encrypt anything. It hands bytes to the [Store] and reads
+// barn does not encrypt anything. It hands bytes to the [Store] and reads
 // them back, so whether objects are sealed at rest is entirely a property of
 // the implementation you supply.
 //
@@ -54,7 +54,7 @@
 // No joins, no multi-table transactions, no secondary indexes, no uniqueness
 // beyond the key, no SQL. Workloads that need those stay on Litestream-replicated
 // SQLite. See the package section of the store README.
-package tablelog
+package barn
 
 import (
 	"context"
@@ -70,7 +70,7 @@ import (
 	"time"
 )
 
-// Store is the object-store surface tablelog needs. Implement it over S3,
+// Store is the object-store surface barn needs. Implement it over S3,
 // GCS, MinIO, a filesystem, or anything else with an atomic create; it is an
 // interface so tests can inject faults too (a crash between the data write and
 // the log write, say).
@@ -93,23 +93,23 @@ var (
 	// of them winning. A Store that reports a lost race any other way will
 	// corrupt the table rather than retry, so implementations should wrap this
 	// error rather than inventing their own.
-	ErrExists = errors.New("tablelog: object already exists")
+	ErrExists = errors.New("barn: object already exists")
 
 	// ErrConflict: a compaction's removed file was already removed by a
 	// concurrent commit. Compact handles it by re-planning; it only surfaces
 	// when re-planning also runs out of attempts.
-	ErrConflict = errors.New("tablelog: commit conflict")
+	ErrConflict = errors.New("barn: commit conflict")
 	// ErrRetriesExhausted: every attempt lost the race for the next log version.
-	ErrRetriesExhausted = errors.New("tablelog: commit retries exhausted")
+	ErrRetriesExhausted = errors.New("barn: commit retries exhausted")
 	// ErrNoVersion: the requested version has not been committed.
-	ErrNoVersion = errors.New("tablelog: no such version")
+	ErrNoVersion = errors.New("barn: no such version")
 	// ErrCorrupt: the log or a checkpoint is inconsistent (a gap in versions, an
 	// entry that removes a file that is not live, a malformed entry).
-	ErrCorrupt = errors.New("tablelog: corrupt table")
+	ErrCorrupt = errors.New("barn: corrupt table")
 	// ErrStaleCommit: the commit's data files are older than MaxCommitAge, so a
 	// concurrent Vacuum may already have treated them as orphans. The commit is
 	// refused rather than risk a log entry that references a deleted file.
-	ErrStaleCommit = errors.New("tablelog: commit too old to be vacuum-safe")
+	ErrStaleCommit = errors.New("barn: commit too old to be vacuum-safe")
 )
 
 const (
@@ -191,11 +191,11 @@ var nameRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
 // table is simply one with no log entries yet (version 0).
 func Open(st Store, tenant, table string, opts ...Option) (*Table, error) {
 	if st == nil {
-		return nil, errors.New("tablelog: nil store")
+		return nil, errors.New("barn: nil store")
 	}
 	for _, n := range []string{tenant, table} {
 		if !nameRE.MatchString(n) {
-			return nil, fmt.Errorf("tablelog: invalid tenant/table name %q (want %s)", n, nameRE)
+			return nil, fmt.Errorf("barn: invalid tenant/table name %q (want %s)", n, nameRE)
 		}
 	}
 	cfg := config{
@@ -230,13 +230,13 @@ func Open(st Store, tenant, table string, opts ...Option) (*Table, error) {
 // twice.
 func (t *Table) Put(ctx context.Context, rows ...Row) (int64, error) {
 	if len(rows) == 0 {
-		return 0, errors.New("tablelog: Put with no rows")
+		return 0, errors.New("barn: Put with no rows")
 	}
 	now := t.cfg.now().UnixMicro()
 	rs := make([]row, len(rows))
 	for i, r := range rows {
 		if r.Key == "" {
-			return 0, errors.New("tablelog: empty key")
+			return 0, errors.New("barn: empty key")
 		}
 		rs[i] = row{key: r.Key, ts: now, payload: r.Payload, ord: int64(i)}
 	}
@@ -247,13 +247,13 @@ func (t *Table) Put(ctx context.Context, rows ...Row) (int64, error) {
 // Deleting an absent key is not an error.
 func (t *Table) Delete(ctx context.Context, keys ...string) (int64, error) {
 	if len(keys) == 0 {
-		return 0, errors.New("tablelog: Delete with no keys")
+		return 0, errors.New("barn: Delete with no keys")
 	}
 	now := t.cfg.now().UnixMicro()
 	rs := make([]row, len(keys))
 	for i, k := range keys {
 		if k == "" {
-			return 0, errors.New("tablelog: empty key")
+			return 0, errors.New("barn: empty key")
 		}
 		rs[i] = row{key: k, del: true, ts: now, ord: int64(i)}
 	}
@@ -457,7 +457,7 @@ func randHex(n int) string {
 		// that pick the same name overwrite each other's data outside the
 		// commit protocol entirely. There is no safe fallback, so this stops
 		// rather than continuing with a name that might collide.
-		panic("tablelog: crypto/rand: " + err.Error())
+		panic("barn: crypto/rand: " + err.Error())
 	}
 	return hex.EncodeToString(b)
 }

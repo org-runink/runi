@@ -1,7 +1,7 @@
 // Command restbench benchmarks the packages the first comparison left out.
 //
 // Six of the twelve packages had no Python figure at all — salvage, chain,
-// lazy, toon, tablelog and budget — which made the published table a selection
+// lazy, toon, barn and budget — which made the published table a selection
 // of our best cases rather than a comparison. This measures five of them
 // against what a Python author would actually reach for, and says plainly that
 // the sixth has no counterpart.
@@ -21,10 +21,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/org-runink/runi/barn"
 	"github.com/org-runink/runi/chain"
 	"github.com/org-runink/runi/lazy"
 	"github.com/org-runink/runi/salvage"
-	"github.com/org-runink/runi/tablelog"
 	"github.com/org-runink/runi/toon"
 )
 
@@ -138,19 +138,19 @@ func main() {
 		_ = json.Unmarshal(jb, &back)
 	})
 
-	// ---- tablelog: 10,000 rows in 100 commits, then read back ----
+	// ---- barn: 10,000 rows in 100 commits, then read back ----
 	const trows, tbatch = 10000, 100
-	res["tablelog_rows"] = trows
-	res["tablelog_write_s"] = timeIt(3, func() {
-		st := tablelog.NewMemStore()
-		tb, err := tablelog.Open(st, "bench", "events")
+	res["barn_rows"] = trows
+	res["barn_write_s"] = timeIt(3, func() {
+		st := barn.NewMemStore()
+		tb, err := barn.Open(st, "bench", "events")
 		if err != nil {
 			panic(err)
 		}
 		ctx := context.Background()
-		batch := make([]tablelog.Row, 0, tbatch)
+		batch := make([]barn.Row, 0, tbatch)
 		for i := 0; i < trows; i++ {
-			batch = append(batch, tablelog.Row{
+			batch = append(batch, barn.Row{
 				Key:     fmt.Sprintf("k%06d", i),
 				Payload: []byte(fmt.Sprintf(`{"event":%d,"kind":"write"}`, i)),
 			})
@@ -164,18 +164,18 @@ func main() {
 	})
 	// read back
 	{
-		st := tablelog.NewMemStore()
-		tb, _ := tablelog.Open(st, "bench", "events")
+		st := barn.NewMemStore()
+		tb, _ := barn.Open(st, "bench", "events")
 		ctx := context.Background()
-		batch := make([]tablelog.Row, 0, tbatch)
+		batch := make([]barn.Row, 0, tbatch)
 		for i := 0; i < trows; i++ {
-			batch = append(batch, tablelog.Row{Key: fmt.Sprintf("k%06d", i), Payload: []byte(`{"x":1}`)})
+			batch = append(batch, barn.Row{Key: fmt.Sprintf("k%06d", i), Payload: []byte(`{"x":1}`)})
 			if len(batch) == tbatch {
 				_, _ = tb.Put(ctx, batch...)
 				batch = batch[:0]
 			}
 		}
-		res["tablelog_read_s"] = timeIt(3, func() { _, _ = tb.Scan(ctx, "") })
+		res["barn_read_s"] = timeIt(3, func() { _, _ = tb.Scan(ctx, "") })
 	}
 
 	res["budget_note"] = "no Python counterpart benchmarked: a deadline split across " +

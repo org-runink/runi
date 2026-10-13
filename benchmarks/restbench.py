@@ -6,7 +6,7 @@ author would actually reach for.
   lazy      -> concurrent.futures.ThreadPoolExecutor
   toon      -> json (there is no TOON in Python; the comparison is against the
                format it replaces, on both time and SIZE)
-  tablelog  -> sqlite3, which is what you reach for when you want versioned
+  barn  -> sqlite3, which is what you reach for when you want versioned
                rows without standing up a database
 
 budget has no counterpart and none is invented here.
@@ -130,15 +130,15 @@ def main():
                 batch = []
         con.close()
 
-    res["tablelog_rows"] = trows
-    res["tablelog_write_s"] = med(sqlite_write, 3)
+    res["barn_rows"] = trows
+    res["barn_write_s"] = med(sqlite_write, 3)
 
     con = sqlite3.connect(":memory:")
     con.execute("CREATE TABLE events (key TEXT, payload TEXT, version INTEGER)")
     con.executemany("INSERT INTO events VALUES (?,?,?)",
                     [("k%06d" % i, '{"x":1}', i // tbatch) for i in range(trows)])
     con.commit()
-    res["tablelog_read_s"] = med(lambda: con.execute("SELECT key,payload FROM events").fetchall(), 3)
+    res["barn_read_s"] = med(lambda: con.execute("SELECT key,payload FROM events").fetchall(), 3)
 
     res["budget_note"] = "no counterpart benchmarked"
 
