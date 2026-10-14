@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Fourteen small Go packages, zero dependencies, every claim measured.</em>
+  Fifteen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-14-informational" alt="fourteen packages">
+  <img src="https://img.shields.io/badge/packages-15-informational" alt="fifteen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -57,6 +57,7 @@ go get github.com/org-runink/runi
 | [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
 | [`runi/drift`](#runidrift--when-a-series-changes-regime) | Notice the moment a stream of readings changes regime, as each one arrives | **100%** |
 | [`runi/rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Turn cumulative counters into per-interval rates, across wraps and resets | **100%** |
+| [`runi/tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Keep subtree sums and maxima of a hierarchy current, and name the heaviest parts | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -94,6 +95,7 @@ you are still the one doing the work.
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
 | 👂 **the ears** | [`drift`](#runidrift--when-a-series-changes-regime) | Hear the moment the flock's footing changes, without staring at every step |
 | 🫀 **the heartbeat** | [`rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Know how fast things are going between two glances, even when the counter rolls over |
+| 🗺️ **the map** | [`tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Know which part of the flock, and which stray within it, is pulling everyone off course |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -789,6 +791,55 @@ buffer, so unlike the rest of these types a copy shares it.
 
 ---
 
+## `runi/tree` — which part of the hierarchy is responsible
+
+Many quantities are measured per node of a hierarchy but asked about per
+subtree: CPU or memory per group in a hierarchy of process groups, bytes per
+directory, cost per team. `tree` keeps every node's subtree sum and subtree
+maximum current as single values and the structure change, so "how much does
+this group use, all of it included" and "which part of it is responsible" stop
+being a walk of the whole hierarchy.
+
+```go
+t := tree.New[string]()
+t.AddRoot("/")
+t.Add("/user", "/")
+t.Add("/user/build", "/user")
+t.Set("/user/build", 40)
+t.Sum("/")                          // 40, O(1)
+t.Max("/")                          // 40 at /user/build, O(1)
+t.TopK("/", 3, tree.BySum, nil)     // the three heaviest subtrees below /
+```
+
+| | |
+|---|---|
+| `Set` | a node's own value; every ancestor's sum and maximum follow, in O(depth), with no allocation |
+| `Sum`, `Max`, `Own` | O(1); ties in `Max` go to the smaller key, so answers are deterministic |
+| `TopK` | the k heaviest descendants by own value or by subtree sum, in O(size · log k), into the caller's slice |
+| `Add`, `Move`, `Remove`, `RemoveSubtree` | change the structure; a `Move` under a node's own descendant is refused with `ErrCycle` |
+| `Snapshot`, `Diff` | what appeared, disappeared or moved between two polls of the hierarchy, in one merge |
+
+**Sums do not drift away from the truth.** Updated naively, a running sum
+loses a small value beside a large one for good: after a node goes from 0 to
+1e16 and back, a sibling's 1 is gone from every ancestor. Each sum is kept with
+Neumaier's compensated summation; a test runs a million updates over fifteen
+orders of magnitude, up to 36 levels deep, against exact big-float sums and
+requires every node to be within one rounding of its true sum, where a naive
+running sum is off by 0.1 at the root. `Rebuild` recomputes them from scratch
+if a caller wants the drift bound reset. `Set` refuses NaN and ±Inf: a NaN
+added to every ancestor could never be subtracted out again.
+
+**What it does not do.** It does not read hierarchies; the caller tells it
+about each node and value. It keeps sums and maxima only — a subtree median
+would need a mergeable sketch per node. Updates cost the node's depth, which
+is a handful for directories and process groups but not for a chain of a
+hundred thousand nodes (that is what link-cut trees are for). And a value is
+the current reading, not a series: turn a cumulative counter into a rate with
+`rate.Counter` first, and feed a subtree's `Sum` to a `drift` detector to ask
+whether it changed regime.
+
+---
+
 ## Does this change anything for you?
 
 A table saying we compute a correlation in 0.701 ms where scipy takes 5.14 ms is
@@ -1360,7 +1411,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the fourteen packages is at 100% of statements**, and the floor is
+**Every one of the fifteen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1390,7 +1441,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the fourteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the fifteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1436,7 +1487,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all fourteen packages
+go test ./...                                 # all fifteen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
