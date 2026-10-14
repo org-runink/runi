@@ -15,9 +15,9 @@ be credited unless you ask not to be.
 
 ## Supported versions
 
-The latest minor release is supported. This module is pre-1.0; until v1.0.0 the
-import path is stable but the API may change in a minor release, and such
-changes are listed in the release notes.
+The latest v1 minor release is supported. Within v1 the exported API does not
+break (see [Compatibility](README.md#compatibility)), so a security fix never
+requires a code change on your side beyond updating the version.
 
 ## What reduces risk here, concretely
 
@@ -27,13 +27,22 @@ Procurement questionnaires tend to ask these. Honest answers:
   build if one appears. There is no transitive dependency tree to audit, no
   upstream maintainer to trust, and no supply-chain surface beyond the Go
   standard library and toolchain itself.
-- **No network, no filesystem, no subprocesses.** None of the three packages
-  opens a socket, reads a file, or executes anything. They compute over values
-  the caller supplies.
-- **No reflection on untrusted input, no `unsafe`, no cgo.**
-- **Deterministic.** Same input, same output. No goroutine-dependent results, no
-  `math/rand`, no clock reads except where a clock is explicitly injected
-  (`memo.Options.Now`, for testing expiry).
+- **No network, no filesystem, no subprocesses.** No package opens a socket,
+  reads a file, or executes anything. They compute over values the caller
+  supplies; `barn` reads and writes only through the `Store` the caller
+  passes in.
+- **No `unsafe`, no cgo.** Reflection is used in exactly two places, both on
+  the caller's own destination types: `toon` and `salvage` decode text a model
+  wrote into the struct the caller names, under `encoding/json`'s rules. A
+  hostile reply can fill fields of that type with any value, but it cannot
+  name a type or reach anything outside it; the only methods it can cause to
+  run are the destination type's own `UnmarshalJSON` and `UnmarshalText`.
+- **Deterministic.** Same input, same output. No goroutine-dependent results
+  and no global random source: `throttle.Backoff` draws only from a source the
+  caller seeds. The clock is read only by `memo` (expiry), `budget` (the
+  deadline) and `barn` (file names and retention), each of which takes an
+  injected clock instead; every other timed type is told the time of each
+  call.
 - **Scanned continuously.** `govulncheck` daily, CodeQL weekly with the
   `security-and-quality` query set, OpenSSF Scorecard weekly.
 
