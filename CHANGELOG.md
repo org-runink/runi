@@ -24,6 +24,13 @@ messages are the record.
 
 ### Added
 
+- **New package `sustain`**: keeps a threshold decision on a noisy series
+  from flapping. `Hysteresis` (separate set and clear levels, optional
+  minimum dwell), `Debounce` (on- and off-delays by time and by readings),
+  `NofM` (N of the last M readings, M ≤ 64), `Band` (ordered levels with a
+  deadband on every edge) and `Slew` (a rate limit on an output). Each takes
+  the reading's own timestamp, skips non-finite and out-of-order readings,
+  and allocates nothing per update.
 - **New package `tree`**: subtree sums and maxima of a hierarchy, kept
   current as single nodes change. `Set` updates every ancestor in O(depth)
   with no allocation; `Sum` and `Max` answer in O(1); `TopK` names the
