@@ -127,7 +127,7 @@ func TestCandidates(t *testing.T) {
 	// bug: a model reply cut off at a token limit leaves its outer object open
 	// while the objects nested inside it are complete, so returning them hands
 	// back a fragment that decodes cleanly and means something else entirely.
-	// TIDE hit the sharp version — a truncated review decoding to zero findings
+	// The sharp version is a truncated review decoding to zero findings,
 	// because the surviving fragment had no "findings" key at all.
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("Candidates = %q\nwant %q", got, want)

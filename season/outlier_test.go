@@ -7,7 +7,7 @@ import (
 )
 
 // spiked is a trending weekly series with one bad reading at index 40. The
-// construction is the one PULSE reported the defect with, kept verbatim so the
+// construction is the one the defect was reported with, kept verbatim so the
 // regression it covers stays the regression it was reported as.
 func spiked(amp float64) []float64 {
 	r := rand.New(rand.NewPCG(1, 7))

@@ -209,7 +209,53 @@ func extreme(x []float64, wantMin bool) float64 {
 // Asking for several quantiles of the same column calls [Quantiles] instead:
 // each call here sorts its own copy, so three quantiles of a 200,000-point
 // column is three sorts of 200,000 points.
-func Quantile(x []float64, q float64) float64 { return Quantiles(x, q)[0] }
+func Quantile(x []float64, q float64) float64 {
+	// One quantile needs at most two order statistics and one copy, so it does
+	// not go through Quantiles, whose output slice, variadic argument and list
+	// of positions were three allocations to find the middle of three numbers.
+	// A short column is copied to the stack and ordered by insertion, which is
+	// no allocation at all; a long one is copied once and only the positions
+	// the quantile reads are put in place. Either way the answer is the one
+	// Quantiles gives: the same order statistics, interpolated the same way.
+	n := len(x)
+	if n == 0 || q < 0 || q > 1 || math.IsNaN(q) {
+		return math.NaN()
+	}
+	if n <= smallQuantile {
+		var buf [smallQuantile]float64
+		s := buf[:n]
+		for i, v := range x {
+			if math.IsNaN(v) {
+				return math.NaN()
+			}
+			j := i
+			for ; j > 0 && v < s[j-1]; j-- {
+				s[j] = s[j-1]
+			}
+			s[j] = v
+		}
+		return quantileOfSorted(s, q)
+	}
+	s := make([]float64, n)
+	for i, v := range x {
+		if math.IsNaN(v) {
+			return math.NaN()
+		}
+		s[i] = v
+	}
+	pos := q * float64(n-1)
+	lo, hi := int(math.Floor(pos)), int(math.Ceil(pos))
+	quickSelect(s, 0, n-1, lo)
+	if hi != lo {
+		quickSelect(s, lo, n-1, hi)
+	}
+	return quantileOfSorted(s, q)
+}
+
+// smallQuantile is the longest column Quantile orders on the stack. Insertion
+// is quadratic, and at this length it still beats a partition pass and the
+// allocation a heap copy costs.
+const smallQuantile = 32
 
 // Quantiles returns several quantiles of x from ONE sorted copy, in the order
 // asked for. It is the function to reach for when summarising a column, which

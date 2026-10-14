@@ -208,6 +208,27 @@ func Trend(y []float64) TrendTest {
 	return out
 }
 
+// Slope is the least-squares slope of y against its index (0, 1, 2, …): the
+// same number as Trend(y).Slope, bit for bit, without the significance test.
+//
+// Trend's test reads the series a second time for the residuals and then
+// evaluates a t-distribution tail, and on a short series that tail is most of
+// the cost. A caller that only wants the direction and size of the change --
+// a rate of drift, a projection -- should not pay for a p-value it discards.
+// It cannot say whether the slope is real, only what it is; for that, Trend.
+//
+// Fewer than two values give 0, as Trend does, and a NaN anywhere gives NaN.
+func Slope(y []float64) float64 {
+	n := len(y)
+	if n < 2 {
+		return 0
+	}
+	fn := float64(n)
+	meanX := (fn - 1) * 0.5
+	_, sxy := trendSums(y, meanX, fn)
+	return sxy / (fn * (fn*fn - 1) / 12)
+}
+
 // isFinite reports whether v is neither infinite nor NaN: v-v is 0 for every
 // finite v and NaN for the rest, which costs one subtract and one compare.
 func isFinite(v float64) bool { return v-v == 0 }

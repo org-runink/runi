@@ -154,7 +154,7 @@ func TestDecodeOneUnwrapsASingletonArray(t *testing.T) {
 // stayed there. A caller who got ErrAmbiguous and did not zero its own
 // variable would then read a value DecodeOne had explicitly refused to choose
 // between — the exact failure DecodeOne exists to prevent, reintroduced by the
-// check for it. Reported by TIDE against v0.7.0.
+// check for it. Present through v0.7.0.
 //
 // The destination is PRE-FILLED here. Asserting that a zero value stayed zero
 // would pass whether or not anything was written, which is a test that cannot
