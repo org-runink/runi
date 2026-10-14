@@ -24,6 +24,13 @@ messages are the record.
 
 ### Added
 
+- **New package `drift`**: change detection on a stream of readings, one value
+  at a time, with no allocation. `Welford` (running mean and variance,
+  mergeable), `EWMA`, `EWMAChart`, two-sided tabular `CUSUM` with an estimate
+  of when the shift began, `PageHinkley`, and `Decayed`, which turns a
+  cumulative counter read at irregular times into a decayed rate. Defaults are
+  the textbook values, and tests check their false-alarm rates against the
+  textbook's.
 - **`toon.EncodeWith` and `toon.Options`.** The delimiter can be a comma (the
   default), a tab or a pipe, declared in each array header the way the TOON
   spec does (`rows[2\t]{id\tnote}:`). A value is quoted only when it contains
@@ -38,6 +45,15 @@ messages are the record.
 
 ### Changed
 
+- **`memo.Store` misses allocate once instead of six times.** The recency
+  order is a list threaded through the entries rather than a
+  `container/list` (which cost an element and an interface box per store),
+  a full store reuses the struct of the entry it evicts, and the channel that
+  wakes coalesced callers is made only when a caller actually waits. A miss
+  at capacity went from about 690 ns, 6 allocations and 336 B to about 355 ns,
+  1 allocation and 48 B; hits still allocate nothing. Behaviour is unchanged
+  and pinned by the existing LRU, capacity and single-flight tests;
+  `TestAllocationBudgets` pins the allocations.
 - **`stats.Quantile` and `stats.Median` allocate at most once.** They no longer
   go through `Quantiles`: a column of up to 32 values is ordered on the stack
   (no allocation), a longer one is copied once and only the order statistics
@@ -96,6 +112,18 @@ messages are the record.
   and CI pins the toolchain the matrix names. Go 1.26 joins the matrix.
 - Four test comments credited a defect to an internal product; they now say
   what the defect was and not who found it.
+
+## v0.8.0
+
+Recorded after the fact; v0.8.0 shipped without a changelog.
+
+### Changed
+
+- **`salvage.DecodeOne` refuses a second top-level value after a stray
+  closing bracket.** For text such as `{"a":1}] [{"b":2}]`, v0.7.1 returned
+  the first value with no error; v0.8.0 returns `ErrAmbiguous`, as it does for
+  any reply from which more than one value decodes. A caller relying on the
+  first value being taken should use `salvage.Decode`.
 
 ## Earlier releases
 

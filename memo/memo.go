@@ -1,7 +1,6 @@
 package memo
 
 import (
-	"container/list"
 	"context"
 	"sync"
 	"time"
@@ -51,14 +50,21 @@ func (s Stats) HitRate() float64 {
 	return float64(s.Hits+s.Coalesced) / float64(total)
 }
 
-type entry[V any] struct {
-	key     any
-	val     V
-	err     error
-	expires time.Time // zero means never
-	el      *list.Element
+// entry is one stored result, and its place in the recency order. The order is
+// a doubly linked list threaded through the entries themselves: container/list
+// would cost an element and an interface box for the key on every store, two
+// allocations for bookkeeping the entry can carry in two pointers.
+type entry[K comparable, V any] struct {
+	key        K
+	val        V
+	err        error
+	expires    time.Time    // zero means never
+	prev, next *entry[K, V] // towards the most and the least recently used
 }
 
+// call is one in-flight execution. done is made only when a second caller
+// arrives to wait on it, under the store's lock, so the common uncontended miss
+// does not allocate a channel nobody will ever receive from.
 type call[V any] struct {
 	done chan struct{}
 	val  V
@@ -71,8 +77,9 @@ type Store[K comparable, V any] struct {
 	mu       sync.Mutex
 	opts     Options
 	now      func() time.Time
-	entries  map[K]*entry[V]
-	lru      *list.List // front = most recently used; values are K
+	entries  map[K]*entry[K, V]
+	head     *entry[K, V] // most recently used
+	tail     *entry[K, V] // least recently used, the next to be evicted
 	inflight map[K]*call[V]
 	stats    Stats
 }
@@ -86,8 +93,7 @@ func New[K comparable, V any](opts Options) *Store[K, V] {
 	return &Store[K, V]{
 		opts:     opts,
 		now:      now,
-		entries:  make(map[K]*entry[V]),
-		lru:      list.New(),
+		entries:  make(map[K]*entry[K, V]),
 		inflight: make(map[K]*call[V]),
 	}
 }
@@ -108,7 +114,7 @@ func (s *Store[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V
 
 	if e, ok := s.entries[key]; ok {
 		if e.expires.IsZero() || s.now().Before(e.expires) {
-			s.lru.MoveToFront(e.el)
+			s.toFront(e)
 			s.stats.Hits++
 			v, err := e.val, e.err
 			s.mu.Unlock()
@@ -121,9 +127,13 @@ func (s *Store[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V
 
 	if c, ok := s.inflight[key]; ok {
 		s.stats.Coalesced++
+		if c.done == nil {
+			c.done = make(chan struct{})
+		}
+		done := c.done
 		s.mu.Unlock()
 		select {
-		case <-c.done:
+		case <-done:
 			return c.val, c.err
 		case <-ctx.Done():
 			var zero V
@@ -131,7 +141,7 @@ func (s *Store[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V
 		}
 	}
 
-	c := &call[V]{done: make(chan struct{})}
+	c := &call[V]{}
 	s.inflight[key] = c
 	s.stats.Misses++
 	s.mu.Unlock()
@@ -143,8 +153,13 @@ func (s *Store[K, V]) Do(ctx context.Context, key K, fn func(context.Context) (V
 	if c.err == nil || s.opts.CacheErrors {
 		s.storeLocked(key, c.val, c.err)
 	}
+	// Read under the lock: a waiter creates done under the same lock, and once
+	// the call is out of inflight no new waiter can find it.
+	done := c.done
 	s.mu.Unlock()
-	close(c.done)
+	if done != nil {
+		close(done)
+	}
 
 	return c.val, c.err
 }
@@ -163,7 +178,7 @@ func (s *Store[K, V]) Get(key K) (v V, ok bool) {
 		s.stats.Expired++
 		return v, false
 	}
-	s.lru.MoveToFront(e.el)
+	s.toFront(e)
 	return e.val, true
 }
 
@@ -190,8 +205,8 @@ func (s *Store[K, V]) Invalidate(key K) bool {
 func (s *Store[K, V]) Purge() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.entries = make(map[K]*entry[V])
-	s.lru.Init()
+	s.entries = make(map[K]*entry[K, V])
+	s.head, s.tail = nil, nil
 }
 
 // Stats returns a snapshot of the counters.
@@ -207,20 +222,60 @@ func (s *Store[K, V]) storeLocked(key K, v V, err error) {
 	if e, ok := s.entries[key]; ok {
 		e.val, e.err = v, err
 		e.expires = s.expiryLocked()
-		s.lru.MoveToFront(e.el)
+		s.toFront(e)
 		return
 	}
-	e := &entry[V]{key: key, val: v, err: err, expires: s.expiryLocked()}
-	e.el = s.lru.PushFront(key)
-	s.entries[key] = e
-	// The list and the map are modified together and only here, so the list
-	// holds exactly one element per entry. Reaching this loop means there are
-	// more entries than the capacity allows, hence at least one element, hence
-	// a non-nil Back. A nil check here would be a branch no test could ever
-	// enter, which is worse than no check: it would read as a handled case.
-	for s.opts.Capacity > 0 && len(s.entries) > s.opts.Capacity {
-		s.removeLocked(s.lru.Back().Value.(K))
+	// At capacity the least recently used entry makes room, and its struct is
+	// reused for the new one: a full store then takes no allocation for the
+	// entry at all. The tail exists, because a store at capacity is not empty.
+	// Evicting before inserting rather than after leaves the same entries,
+	// since the new one would go to the front and never be the one evicted.
+	var e *entry[K, V]
+	if s.opts.Capacity > 0 && len(s.entries) >= s.opts.Capacity {
+		e = s.tail
+		s.unlink(e)
+		delete(s.entries, e.key)
 		s.stats.Evictions++
+		*e = entry[K, V]{}
+	} else {
+		e = new(entry[K, V])
+	}
+	e.key, e.val, e.err, e.expires = key, v, err, s.expiryLocked()
+	s.pushFront(e)
+	s.entries[key] = e
+}
+
+// pushFront makes e the most recently used entry. e must not be linked.
+func (s *Store[K, V]) pushFront(e *entry[K, V]) {
+	e.prev, e.next = nil, s.head
+	if s.head != nil {
+		s.head.prev = e
+	} else {
+		s.tail = e
+	}
+	s.head = e
+}
+
+// unlink takes e out of the recency order.
+func (s *Store[K, V]) unlink(e *entry[K, V]) {
+	if e.prev != nil {
+		e.prev.next = e.next
+	} else {
+		s.head = e.next
+	}
+	if e.next != nil {
+		e.next.prev = e.prev
+	} else {
+		s.tail = e.prev
+	}
+	e.prev, e.next = nil, nil
+}
+
+// toFront marks e as just used.
+func (s *Store[K, V]) toFront(e *entry[K, V]) {
+	if s.head != e {
+		s.unlink(e)
+		s.pushFront(e)
 	}
 }
 
@@ -236,6 +291,6 @@ func (s *Store[K, V]) removeLocked(key K) {
 	if !ok {
 		return
 	}
-	s.lru.Remove(e.el)
+	s.unlink(e)
 	delete(s.entries, key)
 }

@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Twelve small Go packages, zero dependencies, every claim measured.</em>
+  Thirteen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
+  <img src="https://img.shields.io/badge/packages-13-informational" alt="thirteen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -55,6 +55,7 @@ go get github.com/org-runink/runi
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
 | [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
+| [`runi/drift`](#runidrift--when-a-series-changes-regime) | Notice the moment a stream of readings changes regime, as each one arrives | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -90,6 +91,7 @@ you are still the one doing the work.
 | ⚡ **the harness** | [`lazy`](#runilazy--deferred-values-you-can-start-early) | Already moving before the call comes, without computing what is never asked for |
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
+| 👂 **the ears** | [`drift`](#runidrift--when-a-series-changes-regime) | Hear the moment the flock's footing changes, without staring at every step |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -685,6 +687,61 @@ in the package:
   past 2⁵³. Decode into a typed destination, or use `Parse`.
 
 
+## `runi/drift` — when a series changes regime
+
+Detectors for the question you ask of a reading taken every second: **has this
+moved?** Each one does constant work and holds fixed memory per reading,
+allocates nothing, and is a plain value, so one per series is affordable for
+thousands of series.
+
+```go
+c, _ := drift.DefaultCUSUM(target, sigma)   // k = σ/2, h = 5σ, Montgomery's values
+for x := range readings {
+    if s := c.Add(x); s != drift.None {
+        log.Printf("%s shift, began %d samples ago", s, c.Since())
+        c.Reset()
+    }
+}
+```
+
+| Type | For |
+|---|---|
+| `Welford` | the exact running mean and variance, stable far from zero, mergeable across shards |
+| `EWMA` | a smoothed level that forgets, by weight or by half-life |
+| `EWMAChart` | small shifts that persist, when you do not know their size |
+| `CUSUM` | a shift of a size you name — the fastest detector there is for that size — and when it began |
+| `PageHinkley` | a shift when there is no target, against the series' own running mean |
+| `Decayed` | a cumulative counter (time stalled, bytes sent) read at irregular times, turned into the "average over the last 10/60/300 s" rate operating systems publish |
+
+**The defaults mean what the textbook says, and a test checks it.** Monte Carlo
+over 4,000 runs puts `CUSUM` at k = 0.5σ, h = 4σ at an in-control average run
+length of **168.0** samples (the table says 168) and a one-sigma shift caught in
+**8.3** (8.38); at h = 5σ, **463.7** and **10.3** (465 and 10.4). Nudge h by 10%
+and the tests fail, which is what makes them tests.
+
+| Add / Update | ns | allocs |
+|---|---:|---:|
+| `Welford` | 10.3 | **0** |
+| `EWMA` | 5.3 | **0** |
+| `EWMAChart` | 4.7 | **0** |
+| `CUSUM` | 12.7 | **0** |
+| `PageHinkley` | 9.6 | **0** |
+| `Decayed` | 32.3 | **0** |
+
+Timings are `go test -bench` on a 4-vCPU development VM, not the pinned machine
+the tables further down were measured on; the allocation column is the same
+everywhere.
+
+A test asserts zero allocations for every one, and a second test shows the same
+measurement catching an allocation that is there.
+
+**What it does not do.** It does not choose thresholds; the defaults are the
+literature's. It does not know about seasons — a daily cycle is a shift up every
+morning — so watch the residual from `runi/season` instead. It is univariate. A
+signal is a statistic crossing a line, not a probability, and the documented
+false-alarm rates assume independent samples. And it never acts: it returns
+numbers.
+
 ---
 
 ## Does this change anything for you?
@@ -1258,7 +1315,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the twelve packages is at 100% of statements**, and the floor is
+**Every one of the thirteen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1288,7 +1345,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the twelve packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the thirteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1334,7 +1391,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all twelve packages
+go test ./...                                 # all thirteen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
