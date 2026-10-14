@@ -15,24 +15,43 @@ type keySpec struct {
 	isArray bool
 	count   int      // declared length
 	fields  []string // tabular field names, nil for a plain array
+	delim   byte     // what separates values and field names: ',', '\t' or '|'
 }
 
 // splitKey reads "name", "name[3]" or "name[2]{a,b}" followed by a colon.
 func splitKey(l line) (keySpec, string, error) {
+	k, rest, err := parseKey(l)
+	if err == nil && k.name == "" {
+		err = &SyntaxError{l.n, "empty key"}
+	}
+	return k, rest, err
+}
+
+// parseKey is splitKey without insisting on a name, so the root array's
+// keyless header can share it.
+//
+// The bracket may end in a delimiter, as the spec declares one: "[3|]" or
+// "[3<TAB>]" -- absent means comma. Each header declares its own; nothing is
+// inherited from an enclosing array.
+func parseKey(l line) (keySpec, string, error) {
 	t := l.text
 	colon := topLevelColon(t)
 	if colon < 0 {
 		return keySpec{}, "", &SyntaxError{l.n, "expected a key followed by ':'"}
 	}
 	lhs, rest := t[:colon], strings.TrimPrefix(t[colon+1:], " ")
-	k := keySpec{name: lhs}
+	k := keySpec{name: lhs, delim: ','}
 	if open := strings.IndexByte(lhs, '['); open >= 0 {
 		close := strings.IndexByte(lhs[open:], ']')
 		if close < 0 {
 			return keySpec{}, "", &SyntaxError{l.n, "array declaration is missing ']'"}
 		}
 		close += open
-		n, err := strconv.Atoi(lhs[open+1 : close])
+		count := lhs[open+1 : close]
+		if c := count; c != "" && (c[len(c)-1] == '\t' || c[len(c)-1] == '|') {
+			k.delim, count = c[len(c)-1], c[:len(c)-1]
+		}
+		n, err := strconv.Atoi(count)
 		if err != nil || n < 0 {
 			return keySpec{}, "", &SyntaxError{l.n, fmt.Sprintf("array length %q is not a count", lhs[open+1:close])}
 		}
@@ -44,7 +63,7 @@ func splitKey(l line) (keySpec, string, error) {
 			// Split of an empty string yields one empty element, so counting
 			// the slice would always say "one field". The names themselves
 			// are what must be non-empty.
-			for _, f := range strings.Split(tail[1:len(tail)-1], ",") {
+			for _, f := range strings.Split(tail[1:len(tail)-1], string(k.delim)) {
 				name := strings.TrimSpace(f)
 				if name == "" {
 					return keySpec{}, "", &SyntaxError{l.n, "tabular array has an empty field name"}
@@ -52,9 +71,6 @@ func splitKey(l line) (keySpec, string, error) {
 				k.fields = append(k.fields, name)
 			}
 		}
-	}
-	if k.name == "" {
-		return keySpec{}, "", &SyntaxError{l.n, "empty key"}
 	}
 	return k, rest, nil
 }
@@ -110,9 +126,9 @@ func (p *parser) value(k keySpec, rest string, depth int, at line) (any, error) 
 func (p *parser) array(k keySpec, rest string, depth int, at line) (any, error) {
 	// Inline: "tags[3]: red,green,blue"
 	if rest != "" {
-		parts := splitValues(rest)
-		out := make([]any, 0, len(parts))
-		for _, s := range parts {
+		p.cells = splitValues(p.cells[:0], rest, k.delim)
+		out := make([]any, 0, len(p.cells))
+		for _, s := range p.cells {
 			v, err := scalar(strings.TrimSpace(s), at, p.floatNums)
 			if err != nil {
 				return nil, err
@@ -161,13 +177,13 @@ func (p *parser) rows(k keySpec, depth int, at line) (any, error) {
 		if !ok || l.indent != depth {
 			return out, p.checkCount(k, len(out), at)
 		}
-		vals := splitValues(l.text)
-		if len(vals) != len(k.fields) {
-			return nil, &SyntaxError{l.n, fmt.Sprintf("row has %d values but %d fields were declared", len(vals), len(k.fields))}
+		p.cells = splitValues(p.cells[:0], l.text, k.delim)
+		if len(p.cells) != len(k.fields) {
+			return nil, &SyntaxError{l.n, fmt.Sprintf("row has %d values but %d fields were declared", len(p.cells), len(k.fields))}
 		}
-		row := make(map[string]any, len(vals))
+		row := make(map[string]any, len(p.cells))
 		for i, f := range k.fields {
-			v, err := scalar(strings.TrimSpace(vals[i]), l, p.floatNums)
+			v, err := scalar(strings.TrimSpace(p.cells[i]), l, p.floatNums)
 			if err != nil {
 				return nil, err
 			}
@@ -189,33 +205,28 @@ func (p *parser) checkCount(k keySpec, got int, at line) error {
 	return &SyntaxError{at.n, fmt.Sprintf("%s declares %d values but has %d", k.name, k.count, got)}
 }
 
-// splitValues splits on commas that are not inside a quoted string, so a
-// value like "Verify, then approve" stays one value.
-func splitValues(s string) []string {
-	var out []string
-	var b strings.Builder
+// splitValues appends to dst the pieces of s between delimiters that are not
+// inside a quoted string, so a value like "Verify, then approve" stays one
+// value. The pieces are substrings of s -- quotes and escapes are left for
+// scalar to read -- so splitting copies nothing.
+func splitValues(dst []string, s string, delim byte) []string {
 	inQuote, esc := false, false
+	start := 0
 	for i := 0; i < len(s); i++ {
 		c := s[i]
 		switch {
 		case esc:
 			esc = false
-			b.WriteByte(c)
 		case c == '\\' && inQuote:
 			esc = true
-			b.WriteByte(c)
 		case c == '"':
 			inQuote = !inQuote
-			b.WriteByte(c)
-		case c == ',' && !inQuote:
-			out = append(out, b.String())
-			b.Reset()
-		default:
-			b.WriteByte(c)
+		case c == delim && !inQuote:
+			dst = append(dst, s[start:i])
+			start = i + 1
 		}
 	}
-	out = append(out, b.String())
-	return out
+	return append(dst, s[start:])
 }
 
 // scalar reads one value: a quoted string, a number, a bool, null, or a bare
@@ -242,16 +253,42 @@ func scalar(s string, at line, floatNums bool) (any, error) {
 		}
 		return v, nil
 	}
-	if n, err := strconv.ParseInt(s, 10, 64); err == nil {
-		if floatNums {
-			return float64(n), nil
+	// Text that cannot be a number is returned without asking strconv, whose
+	// failed parse allocates an error carrying a copy of the input -- two per
+	// cell, ParseInt then ParseFloat, for every word and path in a table.
+	if !couldBeNumber(s) {
+		return s, nil
+	}
+	if intLiteral(s) {
+		if n, err := strconv.ParseInt(s, 10, 64); err == nil {
+			if floatNums {
+				return float64(n), nil
+			}
+			return n, nil
 		}
-		return n, nil
 	}
 	if f, err := strconv.ParseFloat(s, 64); err == nil {
 		return f, nil
 	}
 	return s, nil
+}
+
+// intLiteral reports whether s is an optional sign and then only digits: the
+// complete set of strings ParseInt accepts in base 10. Anything else -- "1.5",
+// "1e3" -- would only fail there, so it goes straight to ParseFloat.
+func intLiteral(s string) bool {
+	if s[0] == '+' || s[0] == '-' {
+		s = s[1:]
+	}
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // unquote reads a double-quoted string with the JSON escapes. It is written

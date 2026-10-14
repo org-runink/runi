@@ -316,7 +316,7 @@ func TestPropertyFastPathMatchesTheRoundTrip(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		slow, serr := encodeGeneric(reparsed)
+		slow, serr := encodeGeneric(reparsed, ',')
 
 		if (ferr == nil) != (serr == nil) {
 			t.Fatalf("fast err=%v but round-trip err=%v", ferr, serr)

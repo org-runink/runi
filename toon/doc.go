@@ -37,10 +37,29 @@
 // worse than an honest failure — the same rule [github.com/org-runink/runi/salvage]
 // follows for JSON.
 //
+// # Delimiters
+//
+// A table's cells and an inline array's values are separated by a comma, a tab
+// or a pipe, declared inside the brackets of each header as the spec does --
+// rows[2\t]{id\tnote}: -- and absent for comma. [EncodeWith] chooses it;
+// [Decode] reads whatever each header declares. A value is quoted only when it
+// contains the active delimiter, so tab is the cheap choice for prose.
+//
+// # No JSON in between
+//
+// Structs, maps, slices, pointers and scalars are converted directly, with
+// encoding/json's naming rules and errors but without producing JSON. Types
+// that define their own JSON or text marshalling, embedded structs, and the
+// ",string" and ",omitzero" options are left to encoding/json, so its rules
+// apply exactly.
+//
 // # What this package is not
 //
 // It is not a YAML parser. TOON's indentation rules are narrower: two spaces
 // per level, no tabs, no anchors, no multi-line scalars, no comments. Feeding
 // it YAML will usually fail, and when it does not, it will not mean what the
 // YAML meant.
+//
+// It does not quote keys. A map key containing a colon, a delimiter or a
+// newline is written as it is and will not read back; keep such text in values.
 package toon

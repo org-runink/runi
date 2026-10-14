@@ -517,11 +517,12 @@ func TestEncodeReportsAFailedConversion(t *testing.T) {
 	jsonToValue = func([]byte) (any, error) { return nil, errors.New("cannot re-read") }
 	defer func() { jsonToValue = orig }()
 
-	// The input must NOT be a generic tree: a map[string]any is written
-	// directly now and never reaches jsonToValue, so a struct is used to force
-	// the marshal-and-reparse route this error belongs to.
+	// The input must take the marshal-and-reparse route this error belongs
+	// to. Maps and plain structs no longer do -- they are converted without
+	// JSON -- so the field uses ",string", whose rules are left to
+	// encoding/json.
 	if _, err := Encode(struct {
-		A int `json:"a"`
+		A int `json:"a,string"`
 	}{1}); err == nil {
 		t.Error("encoded a document whose conversion failed")
 	}
@@ -697,19 +698,18 @@ func TestUnreachableGuards(t *testing.T) {
 	// list is written as a nested list and a map as a mapping -- but it stays
 	// as the backstop for a type a future change might let through, and it
 	// must quote rather than emit something that reads back as structure.
-	if got := formatScalar(struct{ A int }{1}); got == "" || got[0] != '"' {
+	if got := formatScalar(struct{ A int }{1}, ','); got == "" || got[0] != '"' {
 		t.Errorf("formatScalar of an unexpected type gave %q, want a quoted string", got)
 	}
 
 	// jsonToValue's error cannot happen: the bytes came from json.Marshal one
-	// line earlier. Note the input must be something that does NOT take the
-	// generic fast path -- a map[string]any never reaches jsonToValue now, so
-	// a struct is used to force the marshal-and-reparse route.
+	// line earlier. The input must take the marshal-and-reparse route, which a
+	// map or a plain struct no longer does, so the field uses ",string".
 	orig := jsonToValue
 	defer func() { jsonToValue = orig }()
 	jsonToValue = func([]byte) (any, error) { return nil, errors.New("boom") }
 	if _, err := Encode(struct {
-		A int `json:"a"`
+		A int `json:"a,string"`
 	}{1}); err == nil {
 		t.Error("Encode ignored a jsonToValue failure")
 	}
@@ -721,11 +721,11 @@ func TestMarshalDocFailureIsReported(t *testing.T) {
 	orig := marshalDoc
 	defer func() { marshalDoc = orig }()
 	marshalDoc = func(any) ([]byte, error) { return nil, errors.New("boom") }
-	// A TYPED destination, because a generic one is filled directly now and
-	// never reaches marshalDoc. This error belongs to the round trip, so the
-	// test has to take the round trip.
+	// A destination that only encoding/json can fill: generic ones and plain
+	// structs are filled directly and never reach marshalDoc, and this error
+	// belongs to the round trip, so the field uses ",string".
 	var got struct {
-		A int `json:"a"`
+		A int `json:"a,string"`
 	}
 	if err := Decode("a: 1\n", &got); err == nil {
 		t.Error("Decode ignored a marshal failure")
@@ -883,7 +883,7 @@ func TestFastPathDeclinesNonGenericValues(t *testing.T) {
 // formatScalar through Encode, because checkEncodable and json.Marshal both
 // reject the document first. Exercised directly.
 func TestFormatScalarRejectsUnmarshalableFloat(t *testing.T) {
-	got := formatScalar(math.NaN())
+	got := formatScalar(math.NaN(), ',')
 	if got == "" || got[0] != '"' {
 		t.Errorf("NaN rendered as %q, want a quoted fallback", got)
 	}
@@ -973,9 +973,9 @@ func TestWriteScalarCoversEveryKind(t *testing.T) {
 		{"with\ttab", `"with\ttab"`},
 		{"with\rreturn", `"with\rreturn"`},
 	} {
-		var sb strings.Builder
-		writeScalar(&sb, tc.in)
-		if got := sb.String(); got != tc.want {
+		e := &encoder{delim: ','}
+		e.writeScalar(tc.in)
+		if got := e.sb.String(); got != tc.want {
 			t.Errorf("writeScalar(%#v) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
