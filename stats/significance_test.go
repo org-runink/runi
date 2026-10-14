@@ -360,10 +360,10 @@ func TestBetaFractionGuardsAZeroDenominator(t *testing.T) {
 
 // The documented behaviour for a missing value: everything the standard error
 // feeds propagates as NaN, and P stays at 1 so neither Rising nor Falling can
-// fire on a series that was never measurable. FACE reported this as a
-// divergence from its own copy, which returned a defined StdErr of 0 — a
-// number that reads as an infinitely precise estimate of a slope that does not
-// exist. NaN is the honest answer, so it is the one that is now documented.
+// fire on a series that was never measurable. The tempting alternative, a
+// defined StdErr of 0, is a number that reads as an infinitely precise
+// estimate of a slope that does not exist. NaN is the honest answer, so it is
+// the one that is documented.
 func TestTrendNaNPropagates(t *testing.T) {
 	y := []float64{1, 2, math.NaN(), 4, 5, 6}
 	got := Trend(y)
