@@ -38,6 +38,15 @@ messages are the record.
 
 ### Changed
 
+- **`memo.Store` misses allocate once instead of six times.** The recency
+  order is a list threaded through the entries rather than a
+  `container/list` (which cost an element and an interface box per store),
+  a full store reuses the struct of the entry it evicts, and the channel that
+  wakes coalesced callers is made only when a caller actually waits. A miss
+  at capacity went from about 690 ns, 6 allocations and 336 B to about 355 ns,
+  1 allocation and 48 B; hits still allocate nothing. Behaviour is unchanged
+  and pinned by the existing LRU, capacity and single-flight tests;
+  `TestAllocationBudgets` pins the allocations.
 - **`stats.Quantile` and `stats.Median` allocate at most once.** They no longer
   go through `Quantiles`: a column of up to 32 values is ordered on the stack
   (no allocation), a longer one is copied once and only the order statistics
