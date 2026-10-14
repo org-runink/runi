@@ -24,6 +24,13 @@ messages are the record.
 
 ### Added
 
+- **New package `drift`**: change detection on a stream of readings, one value
+  at a time, with no allocation. `Welford` (running mean and variance,
+  mergeable), `EWMA`, `EWMAChart`, two-sided tabular `CUSUM` with an estimate
+  of when the shift began, `PageHinkley`, and `Decayed`, which turns a
+  cumulative counter read at irregular times into a decayed rate. Defaults are
+  the textbook values, and tests check their false-alarm rates against the
+  textbook's.
 - **`toon.EncodeWith` and `toon.Options`.** The delimiter can be a comma (the
   default), a tab or a pipe, declared in each array header the way the TOON
   spec does (`rows[2\t]{id\tnote}:`). A value is quoted only when it contains
