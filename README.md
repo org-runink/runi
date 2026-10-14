@@ -23,7 +23,7 @@
 <p align="center">
   <a href="https://pkg.go.dev/github.com/org-runink/runi"><img src="https://pkg.go.dev/badge/github.com/org-runink/runi.svg" alt="Go Reference"></a>
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
-  <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25-00ADD8" alt="Go 1.24 | 1.25">
+  <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
   <img src="https://img.shields.io/badge/packages-12-informational" alt="twelve packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
@@ -1435,6 +1435,37 @@ meant to publish ships just as permanently as one that was intended.
 - Tests, with the floor added to `.github/workflows/ci.yml`.
 - A README section following the existing shape.
 - An entry in the package table and the gear table.
+
+## Compatibility
+
+`runi` follows [semantic versioning](https://semver.org). Every change that can
+break a caller is listed under **Breaking** in [CHANGELOG.md](CHANGELOG.md),
+with what to do about it.
+
+**Until v1.0.0** a minor release may break the API. It is rare, it is always in
+the changelog, and the zero-version is there to say it can happen.
+
+**From v1.0.0**, within v1:
+
+- **The exported API of every package stays.** A name is not removed or
+  renamed, a signature does not change, and documented behaviour does not
+  change, except where it was a bug. A break means `/v2`.
+- **What was written can still be read.** A `barn` table written by any v1
+  release opens with every later v1 release. TOON and Avro written by `toon`
+  and `avro` decode with every later release; the exact bytes `Encode` produces
+  may get smaller or cheaper, but never stop meaning the same value.
+- **Zero dependencies.** `go.mod` has no `require` line, and CI fails if one
+  appears.
+
+Not covered: performance figures, which are measurements, not promises;
+anything unexported; and the text of error messages. Match errors with
+`errors.Is` against the exported sentinels (`barn.ErrCorrupt`,
+`salvage.ErrTruncated`, ...), not by string.
+
+**Go versions.** Every release from the one `go.mod` names, which is never
+newer than the oldest release Go itself still supports: today 1.24, 1.25 and
+1.26. CI tests each of them on Linux, macOS and Windows, with the toolchain
+pinned so a newer one cannot stand in for it.
 
 ## Licence
 

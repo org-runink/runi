@@ -23,7 +23,7 @@ jobs:
         # Supported Go versions and all three first-class platforms. A package
         # with no dependencies should build everywhere; this proves it rather
         # than assuming it.
-        go: ['1.24', '1.25']
+        go: ['1.24', '1.25', '1.26']
         os: [ubuntu-latest, macos-latest, windows-latest]
     env:
       # Test on the toolchain the matrix names. With the default (auto), a go
