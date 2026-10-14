@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Sixteen small Go packages, zero dependencies, every claim measured.</em>
+  Seventeen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-16-informational" alt="sixteen packages">
+  <img src="https://img.shields.io/badge/packages-17-informational" alt="seventeen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -59,6 +59,7 @@ go get github.com/org-runink/runi
 | [`runi/rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Turn cumulative counters into per-interval rates, across wraps and resets | **100%** |
 | [`runi/tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Keep subtree sums and maxima of a hierarchy current, and name the heaviest parts | **100%** |
 | [`runi/sustain`](#runisustain--decisions-that-do-not-flap) | Keep a threshold decision on a noisy series from flapping | **100%** |
+| [`runi/throttle`](#runithrottle--acting-less-often-than-you-are-asked-to) | Cap how often something acts: per interval, per target, and after failures | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -98,6 +99,7 @@ you are still the one doing the work.
 | 🫀 **the heartbeat** | [`rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Know how fast things are going between two glances, even when the counter rolls over |
 | 🗺️ **the map** | [`tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Know which part of the flock, and which stray within it, is pulling everyone off course |
 | 🐾 **the paws** | [`sustain`](#runisustain--decisions-that-do-not-flap) | Plant the feet and turn only when the ground has really changed, not at every gust |
+| 🦮 **the leash** | [`throttle`](#runithrottle--acting-less-often-than-you-are-asked-to) | Hold back from chasing every sheep at once, and stop chasing one that keeps getting away |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -885,6 +887,50 @@ crossed a level, use `drift`.
 
 ---
 
+## `runi/throttle` — acting less often than you are asked to
+
+Anything that acts on its own — restarts a process, scales a pool, retries a
+request — can act too often when what it watches misbehaves, and the actions
+then do more harm than the fault. `throttle` has the standard caps as small
+types, each told the time of every call.
+
+```go
+limit, _ := throttle.NewBucket(0.1, 3)                       // one restart per 10 s, 3 at once
+each, _ := throttle.NewCooldown[string](5*time.Minute, 10000) // each service at most every 5 min
+for ev := range unhealthy {
+    if each.Allow(ev.Service, ev.At) && limit.Allow(ev.At) {
+        restart(ev.Service)
+    }
+}
+```
+
+| Type | For |
+|---|---|
+| `Bucket` | a token bucket: `rate` per second on average, `burst` at once; kept as the generic cell rate algorithm in integer nanoseconds, so it never drifts |
+| `Budget` | at most N actions per window of length W, windows laid from an origin you choose ("5 per hour, on the hour") |
+| `Cooldown` | each key at most once per period; expired keys are dropped as it goes, and an optional cap bounds how many are tracked |
+| `Backoff` | retry delays, exponential and capped, randomised by full or decorrelated jitter from a source you seed |
+| `Breaker` | a circuit breaker: closed, open and half-open, with a failure threshold, an open period and a number of probes |
+
+**Every claim is a test.** A `Bucket` never allows more than
+`burst + ⌊rate·t⌋` over any stretch t, and reaches that bound; drained daily
+for ten simulated years it gives exactly the count the arithmetic does. A
+`Budget` never exceeds N per window. A `Cooldown` is exact to the nanosecond
+and makes the same decisions as a one-token `Bucket` per key. Backoff delays
+stay within their bounds and pass a chi-squared test for uniformity. Every
+breaker transition is checked with its time. Each type is checked against a
+naive reference over random and out-of-order calls, and nothing on the hot
+paths allocates.
+
+**What it does not do.** Nothing reads the clock: a time earlier than one
+already seen is taken as the latest and counted, so a clock stepped back
+cannot refill a bucket or end a cooldown early. A full `Cooldown` refuses a
+new key rather than evicting one still cooling down, because an evicted key
+could act again too soon. Nothing is safe for concurrent use; guard it. And
+it does not decide when to act — that is what `drift` and `sustain` are for.
+
+---
+
 ## Does this change anything for you?
 
 A table saying we compute a correlation in 0.701 ms where scipy takes 5.14 ms is
@@ -1456,7 +1502,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the sixteen packages is at 100% of statements**, and the floor is
+**Every one of the seventeen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1486,7 +1532,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the sixteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the seventeen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1532,7 +1578,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all sixteen packages
+go test ./...                                 # all seventeen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
