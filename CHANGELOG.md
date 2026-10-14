@@ -113,6 +113,18 @@ messages are the record.
 - Four test comments credited a defect to an internal product; they now say
   what the defect was and not who found it.
 
+## v0.8.0
+
+Recorded after the fact; v0.8.0 shipped without a changelog.
+
+### Changed
+
+- **`salvage.DecodeOne` refuses a second top-level value after a stray
+  closing bracket.** For text such as `{"a":1}] [{"b":2}]`, v0.7.1 returned
+  the first value with no error; v0.8.0 returns `ErrAmbiguous`, as it does for
+  any reply from which more than one value decodes. A caller relying on the
+  first value being taken should use `salvage.Decode`.
+
 ## Earlier releases
 
 v0.1.0 to v0.8.0 are tagged in this repository. Their changes are in the
