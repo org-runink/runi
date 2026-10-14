@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Thirteen small Go packages, zero dependencies, every claim measured.</em>
+  Fourteen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-13-informational" alt="thirteen packages">
+  <img src="https://img.shields.io/badge/packages-14-informational" alt="fourteen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -56,6 +56,7 @@ go get github.com/org-runink/runi
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
 | [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
 | [`runi/drift`](#runidrift--when-a-series-changes-regime) | Notice the moment a stream of readings changes regime, as each one arrives | **100%** |
+| [`runi/rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Turn cumulative counters into per-interval rates, across wraps and resets | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -92,6 +93,7 @@ you are still the one doing the work.
 | ⏱️ **the pace** | [`budget`](#runibudget--one-deadline-shared-honestly) | Know how long is left, and turn for home in time to deliver |
 | 🏷️ **the tags** | [`chain`](#runichain--records-nobody-can-quietly-rewrite) | Every stop on the route stamped and linked to the last, so a missing one shows |
 | 👂 **the ears** | [`drift`](#runidrift--when-a-series-changes-regime) | Hear the moment the flock's footing changes, without staring at every step |
+| 🫀 **the heartbeat** | [`rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Know how fast things are going between two glances, even when the counter rolls over |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -742,6 +744,49 @@ signal is a statistic crossing a line, not a probability, and the documented
 false-alarm rates assume independent samples. And it never acts: it returns
 numbers.
 
+## `runi/rate` — counters into rates, across wraps and resets
+
+Most system statistics are cumulative totals: bytes, packets, CPU nanoseconds,
+microseconds stalled. `rate` turns two readings of one into the rate over the
+interval between them, correctly when the counter wraps or is reset, and keeps
+bounded-memory summaries of the result. Every reading carries its own
+timestamp; nothing sleeps and resamples.
+
+```go
+c, _ := rate.NewCounter(32)          // a 32-bit counter wraps at 2^32
+for r := range readings {
+    if got, ok := c.Update(r.Total, r.At); ok {
+        fmt.Println(got.Delta, got.PerSecond)
+    }
+}
+```
+
+| Type | For |
+|---|---|
+| `Counter` | the delta and rate between two readings of a counter of a stated width: a wrap is unwrapped, a reset becomes a new baseline |
+| `Window` | min and max over the last n values in O(1) amortised per value (Lemire's monotonic deque) |
+| `Peak` | the largest value since the last reset, and when it happened |
+| `Intervals` | the gaps between readings — last, mean, min, max — to see a producer stall or burst |
+
+**Wrap or reset is a judgement, and the doc says so.** Two readings cannot tell
+one wrap from a reset to a small number. A decrease of at least half the
+counter's range is taken as a wrap (the increase it implies is under half the
+range); a smaller one as a reset. That is a heuristic, documented with its
+failure mode: read a 32-bit byte counter at 10 Gbit/s at least every 1.7 s. A
+64-bit counter never wraps in practice (at 100 Gbit/s a byte counter takes
+about 47 years), so for width 64 every decrease is a reset.
+
+Every `Add` and `Update` allocates nothing (asserted by a test, which a second
+test shows can fail), from about 7 ns (`Peak`) to about 26 ns (`Intervals`) on
+the development VM `drift`'s figures come from. `Intervals` sums its gaps exactly in
+128 bits, so its mean cannot overflow.
+
+**What it does not do.** It does not smooth: for "the average over the last
+minute" of a counter, use `drift.Decayed`. `Intervals.Late` cannot see a gap
+that is still open — a producer that stops never calls `Add` — so compare the
+clock with your last reading yourself. And `Window` holds a preallocated
+buffer, so unlike the rest of these types a copy shares it.
+
 ---
 
 ## Does this change anything for you?
@@ -1315,7 +1360,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the thirteen packages is at 100% of statements**, and the floor is
+**Every one of the fourteen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1345,7 +1390,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the thirteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the fourteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1391,7 +1436,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all thirteen packages
+go test ./...                                 # all fourteen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent

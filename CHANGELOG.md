@@ -24,6 +24,12 @@ messages are the record.
 
 ### Added
 
+- **New package `rate`**: cumulative counters into per-interval rates.
+  `Counter` handles a counter of any width from 1 to 64 bits, unwrapping a
+  wrap and treating a reset as a new baseline (the rule between the two is a
+  documented heuristic); `Window` keeps min and max over the last n values in
+  O(1) amortised; `Peak` the largest value and when; `Intervals` the gaps
+  between readings, summed exactly in 128 bits. No allocation per update.
 - **New package `drift`**: change detection on a stream of readings, one value
   at a time, with no allocation. `Welford` (running mean and variance,
   mergeable), `EWMA`, `EWMAChart`, two-sided tabular `CUSUM` with an estimate
