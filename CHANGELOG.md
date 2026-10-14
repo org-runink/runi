@@ -24,6 +24,13 @@ messages are the record.
 
 ### Added
 
+- **New package `tree`**: subtree sums and maxima of a hierarchy, kept
+  current as single nodes change. `Set` updates every ancestor in O(depth)
+  with no allocation; `Sum` and `Max` answer in O(1); `TopK` names the
+  heaviest descendants by own value or by subtree sum; `Move` refuses to make
+  a node its own ancestor; `Snapshot` and `Diff` report what appeared,
+  disappeared or moved between two polls. Sums use compensated summation,
+  held by a test against exact sums over a million updates.
 - **New package `rate`**: cumulative counters into per-interval rates.
   `Counter` handles a counter of any width from 1 to 64 bits, unwrapping a
   wrap and treating a reset as a new baseline (the rule between the two is a
