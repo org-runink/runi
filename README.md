@@ -1402,6 +1402,39 @@ key cost 29 µs and **one** execution of the function.
 The first three rows are structural rather than hardware-dependent: `All` over
 five 80 ms values finishes in the time of the slowest one, not their sum.
 
+### Inside real applications
+
+The tables above race `runi` against other libraries. The question a team
+actually asks is different: what happens when the hand-rolled code already in
+an application is replaced. Three internal Runink applications made that swap
+and were measured before and after, each comparison in the same binary. The
+setup was a 4-core x86-64 cloud VM (not production hardware), Go 1.26, 8 runs
+per case, compared with `benchstat` at p < 0.01.
+
+| What was replaced | Time | Memory | Allocations |
+|---|---|---|---|
+| A BM25 scorer, many short documents (100 to 1,000) | **1.6–2.3× faster** | **1.9–4.1× less** | **1.6–3.3× fewer** |
+| Median of 3 to 21 values | **2.6–2.9× faster** | | **none** (was 1 per call) |
+| Least-squares slope, 365 points (`stats.Slope`) | **2.2× faster** | | none either side |
+| Hash-chained records (`chain`) | about the same | | |
+
+Not every swap was a speed-up, and these are reported too:
+
+- **A few long passages** cut from one large text: `bm25` is about 7% slower
+  and uses about 4% more memory than the single-purpose scorer it replaced.
+  That scorer did one job. `bm25` does tokenising, stop words and per-term
+  explanations as well.
+- **A full line fit (slope and intercept)**: `stats.Trend` is slower than the
+  hand-rolled one-pass formula it replaced. That formula cancels
+  catastrophically for series far from zero, and `runi`'s does not. A fused
+  one-pass fit is planned.
+- **`memo`**: a hit costs 26 ns and allocates nothing. The application's own
+  wrapper around it costs more than `memo` does.
+
+Measuring the apps also found a regression before release: on a 20-term query
+returning every result, `bm25` allocated more than v0.8.0. It was fixed before
+v1.0.0 (see the changelog).
+
 ### What these numbers do not show
 
 - **The forecasting head-to-head covers statsmodels, and nothing else.** See
@@ -1686,8 +1719,8 @@ meant to publish ships just as permanently as one that was intended.
 break a caller is listed under **Breaking** in [CHANGELOG.md](CHANGELOG.md),
 with what to do about it.
 
-**Until v1.0.0** a minor release may break the API. It is rare, it is always in
-the changelog, and the zero-version is there to say it can happen.
+**Before v1.0.0** a minor release could break the API, and the last one
+before v1 did: `tablelog` became `barn`. Every such break is in the changelog.
 
 **From v1.0.0**, within v1:
 
