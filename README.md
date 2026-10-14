@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Fifteen small Go packages, zero dependencies, every claim measured.</em>
+  Sixteen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-15-informational" alt="fifteen packages">
+  <img src="https://img.shields.io/badge/packages-16-informational" alt="sixteen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -58,6 +58,7 @@ go get github.com/org-runink/runi
 | [`runi/drift`](#runidrift--when-a-series-changes-regime) | Notice the moment a stream of readings changes regime, as each one arrives | **100%** |
 | [`runi/rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Turn cumulative counters into per-interval rates, across wraps and resets | **100%** |
 | [`runi/tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Keep subtree sums and maxima of a hierarchy current, and name the heaviest parts | **100%** |
+| [`runi/sustain`](#runisustain--decisions-that-do-not-flap) | Keep a threshold decision on a noisy series from flapping | **100%** |
 
 They share a design stance rather than any code: **zero dependencies,
 deterministic, and honest about what they do not do.** Each one documents its own
@@ -96,6 +97,7 @@ you are still the one doing the work.
 | 👂 **the ears** | [`drift`](#runidrift--when-a-series-changes-regime) | Hear the moment the flock's footing changes, without staring at every step |
 | 🫀 **the heartbeat** | [`rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Know how fast things are going between two glances, even when the counter rolls over |
 | 🗺️ **the map** | [`tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Know which part of the flock, and which stray within it, is pulling everyone off course |
+| 🐾 **the paws** | [`sustain`](#runisustain--decisions-that-do-not-flap) | Plant the feet and turn only when the ground has really changed, not at every gust |
 
 <p align="center">
   <img src="https://raw.githubusercontent.com/org-runink/runi/main/assets/runi-wallpaper.jpg" alt="Arlo running through a neon-lit street in the rain, wearing the Runi goggles and harness" width="820">
@@ -840,6 +842,49 @@ whether it changed regime.
 
 ---
 
+## `runi/sustain` — decisions that do not flap
+
+A check like "x > limit" run on every reading of a live series changes its
+answer every time noise carries x across the limit, and whatever it drives —
+an alert, a throttle, a scale-up — flaps with it. `sustain` has the standard
+remedies as small value types, one reading at a time, each reading carrying
+its own timestamp.
+
+```go
+h, _ := sustain.NewHysteresis(sustain.High, 0.90, 0.75, time.Minute) // on at ≥ 0.90, off at ≤ 0.75
+for r := range readings {
+    if h.Update(r.Load, r.At) {
+        // over the limit, and staying there until it really comes down
+    }
+}
+```
+
+| Type | For |
+|---|---|
+| `Hysteresis` | on/off with separate set and clear levels (a Schmitt trigger), High or Low, and an optional minimum dwell after each change |
+| `Debounce` | follow a condition only after it has held for a time and/or a number of readings, with separate on- and off-delays |
+| `NofM` | on while at least N of the last M readings (M ≤ 64) are past a level: the radar and control-chart run rule |
+| `Band` | ordered levels — normal, warning, critical — with a deadband on every edge |
+| `Slew` | bound how fast an output follows its input, in units per second, separately up and down |
+
+**Every claim is a test.** Noise smaller than the deadband changes a
+`Hysteresis` or a `Band` at most once, where a single-level comparator fed the
+same noise flaps over a thousand times. No two changes are closer than the
+dwell. `NofM` is checked against every bit pattern of 12 readings for every
+N ≤ M ≤ 12. `Slew` never moves further than its rate allows and never passes
+its input. Every `Update` allocates nothing, at about 15–37 ns.
+
+**What it does not do.** A NaN, an infinity, or a reading timed at or before
+the previous one is skipped and counted, never taken as evidence; the state
+is as if it had not arrived. Nothing reads the clock, so a condition that
+stops being reported keeps its state: compare the time of your last reading
+with now yourself. It does not choose your levels: alarm-management
+standards (ANSI/ISA-18.2) tabulate starting deadbands and delays by kind of
+measurement. To decide whether a series has changed regime rather than
+crossed a level, use `drift`.
+
+---
+
 ## Does this change anything for you?
 
 A table saying we compute a correlation in 0.701 ms where scipy takes 5.14 ms is
@@ -1411,7 +1456,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the fifteen packages is at 100% of statements**, and the floor is
+**Every one of the sixteen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1441,7 +1486,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the fifteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the sixteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1487,7 +1532,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all fifteen packages
+go test ./...                                 # all sixteen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent
