@@ -5,6 +5,7 @@ package toon
 import (
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 )
 
@@ -20,7 +21,14 @@ func (e *SyntaxError) Error() string { return fmt.Sprintf("toon: line %d: %s", e
 
 // Decode parses text as TOON and stores the result in v, which must be a
 // non-nil pointer. Field mapping follows encoding/json, including `json` tags,
-// so a struct that already round-trips as JSON needs no new tags.
+// so a struct that already round-trips as JSON needs no new tags, and a value
+// that does not fit its field is the same error json.Unmarshal would give.
+//
+// Ordinary destinations -- structs, maps with string keys, slices, pointers,
+// scalars and `any` -- are filled straight from the parsed document; no JSON is
+// produced. A destination with its own UnmarshalJSON or UnmarshalText, and the
+// struct shapes whose rules belong to encoding/json (embedded fields, the
+// ",string" option, Go arrays), are filled through encoding/json instead.
 //
 // A declared array length that disagrees with the number of values is taken as
 // the model miscounting and the values win; use [Strict] to reject it.
@@ -82,6 +90,18 @@ func decode(text string, v any, strict bool) error {
 		}
 	}
 
+	if !generic {
+		rv := reflect.ValueOf(v)
+		// A dry run first: it writes nothing, and only when it finds the
+		// whole document fits is the destination filled. Otherwise it is
+		// handed to encoding/json untouched, so the error and anything left
+		// half-filled are exactly json's own.
+		if rv.Kind() == reflect.Pointer && !rv.IsNil() && fromTree(doc, rv.Elem(), true) == nil {
+			_ = fromTree(doc, rv.Elem(), false) // the dry run has already checked it
+			return nil
+		}
+	}
+
 	b, err := marshalDoc(doc)
 	if err != nil {
 		return fmt.Errorf("toon: %w", err)
@@ -111,8 +131,21 @@ func parse(text string, strict, floatNums bool) (any, error) {
 		return map[string]any{}, nil
 	}
 	p := &parser{lines: lines, strict: strict, floatNums: floatNums}
-	root, err := p.block(0)
-	if err != nil {
+	var root any
+	if first := lines[0]; first.indent == 0 && strings.HasPrefix(first.text, "[") {
+		// A keyless header, "[3]: a,b,c" or "[2]{id,name}:", is the spec's
+		// root array. Models trained on the spec write it, so it is read;
+		// Encode still writes a top-level list under the key "items".
+		k, rest, err := parseKey(first)
+		if err != nil {
+			return nil, err
+		}
+		p.i++
+		root, err = p.array(k, rest, 0, first)
+		if err != nil {
+			return nil, err
+		}
+	} else if root, err = p.block(0); err != nil {
 		return nil, err
 	}
 	if p.i < len(p.lines) {
@@ -169,6 +202,9 @@ type parser struct {
 	// int64, which is what encoding/json would have produced. Set only for a
 	// generic destination; Parse leaves it off and stays exact.
 	floatNums bool
+	// cells is reused by every row and inline array, so splitting a line
+	// costs no allocation once the widest row has been seen.
+	cells []string
 }
 
 func (p *parser) peek() (line, bool) {

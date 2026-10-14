@@ -626,6 +626,8 @@ most of the tokens.
 text, err := toon.Encode(report)        // to send
 err = toon.Decode(reply, &findings)     // to read back
 err = toon.Strict(reply, &findings)     // and to insist the counts match
+
+text, err = toon.EncodeWith(report, toon.Options{Delimiter: '\t'}) // cheaper on prose
 ```
 
 ```
@@ -634,25 +636,53 @@ findings[2]{id,severity,file}:
   2,low,internal/cache.go
 ```
 
+**No JSON on the way.** Structs, maps, slices, pointers and scalars are walked
+directly in both directions, applying `encoding/json`'s rules — `json` tags,
+`omitempty`, `-`, `[]byte` as base64, the same errors for a value that does not
+fit its field — without producing a byte of JSON. A type with its own
+`MarshalJSON`/`UnmarshalText` (`time.Time`), embedded structs and the `,string`
+option are still handed to `encoding/json`, so its rules apply exactly; that
+costs speed, never correctness. Property tests generate random struct types and
+hold both routes to the same bytes, values and errors. Against the previous
+release, on 2,000 rows: decoding into structs makes **85% fewer allocations**
+(12.8k, was 86k), decoding into a map **76% fewer** (12k, was 50k) and encoding
+structs **61% fewer** (13k, was 34k) — budgets pinned by a test. In the
+package's benchmarks that made struct decoding about 3× faster, on a par with
+`json.Unmarshal` while reading half the bytes. Encoding a struct got about 2×
+faster but is still slower than `json.Marshal`, because each row becomes a map
+before it is written.
+
+**Delimiters, as the spec declares them.** `Options.Delimiter` is `,`, tab or
+`|`, written into every header — `rows[2\t]{id\tnote}:` — so any TOON reader
+splits the rows correctly. A value is quoted only when it contains the
+*active* delimiter, so under tab a summary like `Checked the config, then
+restarted` costs no quote characters at all; under comma it costs two per cell.
+`Decode` reads all three, header by header.
+
 `Decode` is deliberately forgiving, because the input is a model's output: it
-strips a ``` fence, ignores blank lines, and **takes the values over the
-declared count**, since a model that miscounts its own list has still told you
-the list. `Strict` is the one that refuses a count mismatch, and that is the
-difference between the two — reach for `Strict` when the decoded value drives a
-decision rather than being shown to someone.
+strips a ``` fence, ignores blank lines, reads the spec's keyless root array
+(`[3]: a,b,c`), and **takes the values over the declared count**, since a model
+that miscounts its own list has still told you the list. `Strict` is the one
+that refuses a count mismatch, and that is the difference between the two —
+reach for `Strict` when the decoded value drives a decision rather than being
+shown to someone.
+
+Numbers are written in the spec's canonical form: the shortest digits that read
+back exactly, no exponent between 1e-6 and 1e21, and `-0` as `0`.
 
 Three asymmetries are documented rather than hidden, because each one is a test
 in the package:
 
-- a **top-level list** gains the key `items`, since a TOON document is a mapping
-  and a bare list has no key to hang on;
+- a **top-level list** is written under the key `items`, since a TOON document
+  written by this package is a mapping; a keyless root array is read, not
+  written;
 - an **empty object** as a field's value is written `key:` and reads back as
   null, because the parser cannot tell that from a line a model left blank, and
   guessing "empty object" would make it stricter on exactly the input it exists
   to be lenient about;
 - `Parse` keeps an integer as an `int64` and so is exact; `Decode` into `any`
-  goes through `encoding/json`, which rounds past 2⁵³. Decode into a typed
-  destination, or use `Parse`.
+  gives every number as a `float64`, as `encoding/json` would, which rounds
+  past 2⁵³. Decode into a typed destination, or use `Parse`.
 
 
 ---
