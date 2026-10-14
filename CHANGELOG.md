@@ -8,7 +8,16 @@ in the README, under [Compatibility](README.md#compatibility).
 Releases before the first entry here are listed only as tags; their commit
 messages are the record.
 
-## Unreleased
+## v1.0.0 — 2026-10-14
+
+The first stable release. From here on, within v1, the exported API of every
+package stays, what `barn`, `toon` and `avro` wrote stays readable, and the
+module keeps zero dependencies. The promise and what it does not cover are
+in the README, under [Compatibility](README.md#compatibility).
+
+This release carries everything since v0.8.0. Five packages are new: `drift`,
+`rate`, `tree`, `sustain` and `throttle`. One change breaks callers: `tablelog`
+is now `barn`.
 
 ### Breaking
 
