@@ -833,12 +833,27 @@ func (ix *Index) contribution(idf float64, p posting) float64 {
 // holding any of its terms, and the breakdown for all but the k returned would
 // be built and thrown away. A term the query repeats adds to its entry twice,
 // in query order, exactly as scoring it did.
+//
+// The map is sized by the terms this document actually holds, not by the
+// query: a twenty-term query sized every result's map for twenty entries, and
+// a map that large costs several allocations where the two or three terms a
+// typical document matches fit in one. So the contributions are found first,
+// into a buffer on the stack, and the map is made once their number is known.
 func (ix *Index) explain(matches []match, doc int32) map[string]float64 {
-	terms := make(map[string]float64, len(matches))
+	type hit struct {
+		term string
+		c    float64
+	}
+	var buf [16]hit
+	hits := buf[:0]
 	for _, m := range matches {
 		if p, ok := findPosting(m.post, doc); ok {
-			terms[m.term] += ix.contribution(m.idf, p)
+			hits = append(hits, hit{m.term, ix.contribution(m.idf, p)})
 		}
+	}
+	terms := make(map[string]float64, len(hits))
+	for _, h := range hits {
+		terms[h.term] += h.c
 	}
 	return terms
 }

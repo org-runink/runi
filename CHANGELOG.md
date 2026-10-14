@@ -99,6 +99,13 @@ messages are the record.
 
 ### Fixed
 
+- **`bm25.Search` no longer allocates more than v0.8.0 for wide queries.**
+  Each result's `Terms` map was made with room for every query term, and a
+  map that large costs several allocations where the two or three terms a
+  document matches fit in a small one. A 20-term query returning every
+  result (k = 0) over 100 documents went from 472 allocations on v0.8.0 to
+  537 on main; it is now 345, with scores unchanged to the bit.
+  `TestExplainIsSizedByTheDocument` pins it.
 - **`season.Decompose` kept a season's sharp features and stopped inventing
   breaks.** Before the season was fitted, each point was checked against its
   neighbours in time, so a feature that recurs every cycle -- a two-day
