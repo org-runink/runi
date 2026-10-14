@@ -53,6 +53,22 @@ messages are the record.
 
 ### Fixed
 
+- **`season.Decompose` kept a season's sharp features and stopped inventing
+  breaks.** Before the season was fitted, each point was checked against its
+  neighbours in time, so a feature that recurs every cycle -- a two-day
+  weekend dip in a weekly series -- was replaced as an outlier every week, and
+  the fitted season lost its most distinctive shape (on a clean series with a
+  weekend dip of -12 and -13, a season of -1.7 and -3.6, and residuals of about
+  -12 on those days). Points are now checked against the same phase in the
+  neighbouring cycles, which keeps a recurring feature and still removes a
+  one-off spike. Separately, the first-pass trend line was a least-squares fit,
+  which takes part of the season and is tilted by a spike; on a clean series
+  the error left a small ripple that the break search paid to explain with
+  changepoints that do not exist (`[7 14 21]` on a straight trend). It is now a
+  seasonal Theil–Sen line: the median of differences one period apart, which a
+  season cancels exactly and a spike barely moves. Both clean series now
+  decompose exactly, with no changepoints; the spike and outlier tests are
+  unchanged and pass. The cost is within measurement noise.
 - **`barn` orders the live file set by commit version, not by the clock.** File
   names start with a creation timestamp, and ordering by name could put two
   files from the same microsecond in the wrong order, which surfaced as a

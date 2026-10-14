@@ -514,11 +514,14 @@ type line struct {
 // Decompose splits x into trend + season + residual.
 //
 // The order matters and is fixed: the period is found on the differenced
-// series; a season is fitted after removing a straight line; changepoints are
+// series; a season is fitted after removing a straight line fitted so that
+// neither the season nor a spike can tilt it (see phaseLine); changepoints are
 // found after removing that season (so the season is not mistaken for breaks);
-// then the trend is refitted between them and the season refitted once on
-// what the trend leaves. NaN values are forward-filled, and leading NaNs take
-// the first real value.
+// then the trend is refitted between them and the season refitted once on what
+// the trend leaves. Both season fits clean outliers against the same phase in
+// neighbouring cycles (see phaseHampel), so a spike is removed and a sharp
+// feature that recurs every cycle is kept. NaN values are forward-filled, and
+// leading NaNs take the first real value.
 func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	if len(x) < 4 {
 		return nil, ErrTooShort
@@ -547,7 +550,7 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	// First pass: one straight line, then the season on what it leaves.
 	var four Fourier
 	if period > 0 {
-		one := fitLines(y, nil)
+		one, sigma := phaseLine(y, period)
 		// Cleaned, like every other fit here. FitFourier is least squares, so
 		// a spike does not stay where it happened: it is spread over the
 		// harmonics and leaves a wrong season at every index. The breaks found
@@ -562,7 +565,7 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 		// columns need and spans the period densely enough to stay well
 		// conditioned. Loosen that guard and this becomes a real error that has
 		// to be returned.
-		f, _ := FitFourier(hampel(sub(y, evalLines(one, n))), period, opt.Harmonics)
+		f, _ := FitFourier(phaseHampel(sub(y, evalLines(one, n)), period, sigma), period, opt.Harmonics)
 		four = f
 	}
 	// Breaks are looked for in the deseasonalised series.
@@ -585,7 +588,8 @@ func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	trend := evalLines(d.lines, n)
 	// Second pass: refit the season on what the final trend leaves.
 	if period > 0 {
-		if f, err := FitFourier(hampel(sub(y, trend)), period, opt.Harmonics); err == nil {
+		left := sub(y, trend)
+		if f, err := FitFourier(phaseHampel(left, period, lagSigma(left, period)), period, opt.Harmonics); err == nil {
 			four = f
 		}
 	}
@@ -929,6 +933,144 @@ func fitLines(y []float64, cps []int) []line {
 	return out
 }
 
+// phaseLine fits the first-pass straight line to a seasonal series, with the
+// season kept out of it and a bad reading too.
+//
+// The slope is the median of the differences one period apart, divided by the
+// period: y[t]-y[t-period] is the trend's rise over one cycle plus noise, and
+// the season, whatever its shape, cancels out of it exactly. This is the
+// seasonal form of the Theil–Sen estimator (Sen 1968; Hirsch, Slack & Smith 1982, Water
+// Resources Research 18(1)).
+//
+// A least-squares line through a seasonal series does neither. Over any finite
+// stretch the season is correlated with time -- a cycle that ends on its high
+// days tilts the fit -- so the line takes part of the season, the season fitted
+// to what is left takes the rest with an error, and on a clean series that
+// error is a ripple the break search then pays to explain with breaks that do
+// not exist. And one spike moves a least-squares slope by its leverage, which
+// tilts every cycle's residual away from the next; a median of differences
+// moves for neither, since a spike touches two differences out of n-period.
+//
+// It also returns the robust noise scale of what the line leaves, lagSigma at
+// one period, which the season fit's outlier filter needs next.
+//
+// The caller guarantees at least two full cycles, so there is at least one
+// difference.
+func phaseLine(y []float64, period int) ([]line, float64) {
+	n := len(y)
+	d := make([]float64, n-period)
+	for t := period; t < n; t++ {
+		d[t-period] = y[t] - y[t-period]
+	}
+	med := medianIn(d)
+	b := med / float64(period)
+	// The intercept only sets the level of what is left, and a level is
+	// absorbed by the Fourier fit's mean and ignored by phaseHampel, which
+	// compares medians. So it is the plain mean, which a spike can shift but
+	// cannot tilt.
+	a := 0.0
+	for t, v := range y {
+		a += v - b*float64(t)
+	}
+	// What the line leaves, differenced one period apart, is d minus its own
+	// median, so the robust scale phaseHampel needs for it is already one
+	// median away: the same number lagSigma would compute, without a second
+	// pass over the series to difference it again.
+	for i := range d {
+		d[i] = math.Abs(d[i] - med)
+	}
+	sigma := medianIn(d) / 0.6744897501960817 / math.Sqrt2
+	return []line{{start: 0, end: n - 1, a: a / float64(n), b: b}}, sigma
+}
+
+// phaseHampel is hampel with the neighbours taken from the same phase of the
+// neighbouring cycles instead of from the neighbouring points.
+//
+// hampel compares a point with the seven around it in time. That is right for
+// finding a spike in a series without a season, and wrong for cleaning one
+// before a season is fitted to it: a sharp feature that recurs every cycle --
+// a two-day weekend dip in a weekly series -- is outvoted by its weekday
+// neighbours every single week and replaced, and the season fitted afterwards
+// is the season with its most distinctive feature removed. Against the same
+// weekday of the surrounding weeks the dip is ordinary and stays, while a spike
+// on one day still stands out from that day's other weeks.
+//
+// The scale is lagSigma at one period, for the same reason: first differences
+// of a sharp season are large, a scale built from them is inflated, and the
+// filter would then miss real spikes too.
+//
+// sigma is the robust scale of v's lag-period differences (lagSigma at one
+// period, or what phaseLine returns alongside its line). Fewer than three
+// cycles give each phase fewer than three points, and two points cannot
+// outvote one, and a zero scale means an exactly periodic series with nothing
+// to clean; in both cases v is returned as given.
+func phaseHampel(v []float64, period int, sigma float64) []float64 {
+	n := len(v)
+	if n < 3*period || !(sigma > 0) {
+		return v
+	}
+	limit := hampelMADs * sigma
+	out := make([]float64, n)
+	// Each phase is copied out once into a contiguous column and filtered
+	// there, so the window slides along adjacent memory instead of striding a
+	// period at a time, and no point pays for a division to find its phase.
+	col := make([]float64, 0, n/period+1)
+	var win [2*hampelHalf + 1]float64
+	for p := range period {
+		col = col[:0]
+		for t := p; t < n; t += period {
+			col = append(col, v[t])
+		}
+		m := len(col)
+		w := min(2*hampelHalf+1, m)
+		allowed := (w - 1) / 2
+		for k, vi := range col {
+			lo := min(max(k-hampelHalf, 0), m-w)
+			band := col[lo : lo+w]
+			// The shortcut hampel takes, for the same reason and with the
+			// same proof: the median can only leave [vi-limit, vi+limit] if
+			// more than (w-1)/2 of the window lies beyond one edge -- for an
+			// odd window that is the middle element, for an even one either of
+			// the middle two. When neither count gets there the point stays,
+			// with no sort. The residual Decompose passes in has no NaN: the
+			// series was filled.
+			loEdge, hiEdge := vi-limit, vi+limit
+			below, above := 0, 0
+			for _, x := range band {
+				if x < loEdge {
+					below++
+				}
+				if x > hiEdge {
+					above++
+				}
+			}
+			t := p + k*period
+			if below <= allowed && above <= allowed {
+				out[t] = vi
+				continue
+			}
+			copy(win[:w], band)
+			for a := 1; a < w; a++ {
+				x, b := win[a], a
+				for ; b > 0 && x < win[b-1]; b-- {
+					win[b] = win[b-1]
+				}
+				win[b] = x
+			}
+			med := win[w/2]
+			if w%2 == 0 {
+				med = (win[w/2-1] + win[w/2]) / 2
+			}
+			if math.Abs(vi-med) > limit {
+				out[t] = med
+				continue
+			}
+			out[t] = vi
+		}
+	}
+	return out
+}
+
 func evalLines(ls []line, n int) []float64 {
 	out := make([]float64, n)
 	for _, l := range ls {
@@ -971,10 +1113,16 @@ func lineSSR(y []float64, lo, hi int) float64 {
 // noiseSigma estimates the noise level from first differences, robustly: the
 // median absolute deviation, scaled to a standard deviation and divided by √2
 // because a difference of two noisy points carries twice the variance.
-func noiseSigma(y []float64) float64 {
-	d := make([]float64, len(y)-1)
-	for i := 1; i < len(y); i++ {
-		d[i-1] = y[i] - y[i-1]
+func noiseSigma(y []float64) float64 { return lagSigma(y, 1) }
+
+// lagSigma is noiseSigma over differences lag points apart. At a lag of one
+// period a season cancels exactly, so what is left is the noise alone -- which
+// first differences cannot give when the season itself moves sharply from one
+// point to the next.
+func lagSigma(y []float64, lag int) float64 {
+	d := make([]float64, len(y)-lag)
+	for i := lag; i < len(y); i++ {
+		d[i-lag] = y[i] - y[i-lag]
 	}
 	// medianIn reorders d, which costs nothing here and saves two copies of
 	// the whole series: the next step rewrites every element from its own

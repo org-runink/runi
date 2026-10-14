@@ -73,8 +73,8 @@ func decomposeRefABC(x []float64, opt Options) (*Decomposition, error) {
 
 	var four Fourier
 	if period > 0 {
-		one := fitLines(y, nil)
-		f, _ := FitFourier(hampel(sub(y, evalLines(one, n))), period, opt.Harmonics)
+		one, sigma := phaseLine(y, period)
+		f, _ := FitFourier(phaseHampel(sub(y, evalLines(one, n)), period, sigma), period, opt.Harmonics)
 		four = f
 	}
 	deseason := make([]float64, n)
@@ -87,7 +87,8 @@ func decomposeRefABC(x []float64, opt Options) (*Decomposition, error) {
 	d.lines = fitLines(deseason, d.Changepoints)
 	trend := evalLines(d.lines, n)
 	if period > 0 {
-		if f, err := FitFourier(hampel(sub(y, trend)), period, opt.Harmonics); err == nil {
+		left := sub(y, trend)
+		if f, err := FitFourier(phaseHampel(left, period, lagSigma(left, period)), period, opt.Harmonics); err == nil {
 			four = f
 		}
 	}
