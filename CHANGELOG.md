@@ -24,6 +24,14 @@ messages are the record.
 
 ### Added
 
+- **New package `throttle`**: caps on how often something acts. `Bucket`
+  (a token bucket kept as GCRA in integer nanoseconds), `Budget` (N per
+  fixed window), `Cooldown` (each key at most once per period, expired keys
+  dropped as it goes), `Backoff` (full and decorrelated jitter from a
+  caller-seeded source) and `Breaker` (closed, open, half-open). Every
+  timed call takes the caller's timestamp; a time earlier than the latest
+  is treated as the latest, so time never runs backwards. No allocation on
+  the hot paths.
 - **New package `sustain`**: keeps a threshold decision on a noisy series
   from flapping. `Hysteresis` (separate set and clear levels, optional
   minimum dwell), `Debounce` (on- and off-delays by time and by readings),
