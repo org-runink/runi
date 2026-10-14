@@ -15,11 +15,15 @@ messages are the record.
 - **`tablelog` is now `barn`.** The import path is
   `github.com/org-runink/runi/barn`, the package name is `barn`, and error
   messages start `barn:`. Rename the import and the identifier; nothing else
-  in the API changed. **Tables already on disk are unaffected:** the schemas
-  written into new files say `org.runink.store.barn` where they used to say
-  `org.runink.store.tablelog`, but files are decoded by field position and the
-  stored schema is not compared, so a table written by v0.8.0 opens, reads,
-  time-travels and accepts writes. `TestTablesWrittenAsTablelogStillOpen`
+  in the API changed. **The old import path still compiles for this
+  release:** `tablelog` remains as a deprecated package whose types are
+  aliases of barn's, whose errors are barn's own values (so `errors.Is`
+  matches across both) and whose functions forward to barn's. It will be
+  removed in the next release. **Tables already on disk are unaffected:** the
+  schemas written into new files say `org.runink.store.barn` where they used
+  to say `org.runink.store.tablelog`, but files are decoded by field position
+  and the stored schema is not compared, so a table written by v0.8.0 opens,
+  reads, time-travels and accepts writes. `TestTablesWrittenAsTablelogStillOpen`
   rewrites every file of a table the way v0.8.0 wrote it and checks all four.
 
 ### Added

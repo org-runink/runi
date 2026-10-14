@@ -485,6 +485,11 @@ interface — S3, GCS, MinIO, a filesystem, your own service. [`MemStore`] is a
 complete in-memory implementation, which is both the reference and enough to
 run a table in a test with no infrastructure at all.
 
+**Coming from `tablelog`?** That was this package's name until v0.8.0. The old
+import path still compiles for one release — a deprecated package of aliases
+and forwarders, so values pass freely between old and new code — and tables
+written under the old name open unchanged. Rename the import when you can.
+
 **barn does not encrypt anything.** Whether objects are sealed at rest is a
 property of the Store you supply. If you do seal them, bind the ciphertext to
 the object's **key** — keys here encode tenant, table and path, so a data file
