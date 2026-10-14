@@ -31,9 +31,19 @@ messages are the record.
 - **`toon.Decode` reads every delimiter**, header by header, and the spec's
   keyless root array (`[3]: a,b,c`, `[2]{id,name}:`). `Encode` still writes a
   top-level list under the key `items`.
+- **`stats.Slope`**, the least-squares slope of a series against its index:
+  `Trend(y).Slope` bit for bit, without the residual pass and t-distribution
+  tail `Trend` spends most of its time on. About 3× faster than `Trend` at 365
+  points; use `Trend` when the slope has to be tested.
 
 ### Changed
 
+- **`stats.Quantile` and `stats.Median` allocate at most once.** They no longer
+  go through `Quantiles`: a column of up to 32 values is ordered on the stack
+  (no allocation), a longer one is copied once and only the order statistics
+  the quantile reads are put in place. The median of three values went from
+  3 allocations and about 100 ns to none and about 20 ns. Results are those of
+  `Quantiles`, held to it by a test.
 - **`toon` no longer goes through JSON.** Structs, maps, slices, pointers and
   scalars are converted directly, in both directions, under `encoding/json`'s
   naming rules and with its errors. Types with their own JSON or text
