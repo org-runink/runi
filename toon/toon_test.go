@@ -740,10 +740,22 @@ func TestMoreStructuralRefusals(t *testing.T) {
 		name string
 		text string
 	}{
+		// This one is a genuine skip and stays: the document's unit is 2 --
+		// the first step it makes -- so the third line lands at depth 3
+		// under a list at depth 1, with nothing in between for it to
+		// belong to. The unit being inferred does not make it fit.
 		{"dash item indented past its list", "a[2]:\n  - 1\n      - 2\n"},
 		{"duplicate key inside a dash item", "a[1]:\n  - x: 1\n    x: 2\n"},
-		{"value block indented two levels", "a:\n      b: 1\n"},
-		{"array body indented two levels", "a[1]:\n      - 1\n"},
+		// "value block indented two levels" ("a:\n      b: 1\n") and
+		// "array body indented two levels" ("a[1]:\n      - 1\n") were here.
+		// They are two levels only if a level is fixed at two spaces. Each
+		// document makes exactly ONE step, so its unit is six and its body
+		// sits one level in -- there is no second level to skip, and nothing
+		// has to be invented to read either of them. Both now decode; see
+		// TestIndentUnitIsTheDocumentsOwn.
+		//
+		// What replaces them as the real defect is INCONSISTENCY, which has
+		// its own test below: a document that steps 4 and then 6 is refused.
 	} {
 		var got any
 		err := Decode(tc.text, &got)

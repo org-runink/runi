@@ -134,7 +134,11 @@ func TestRootArrayRefusals(t *testing.T) {
 		"[2: a,b\n",          // no closing bracket
 		"[2]{a,b}:\n  1\n",   // a row with too few values
 		"[2]: a\nextra: 1\n", // the root array is the whole document
-		"  [2]: a,b\n",       // a root header is not indented
+		// "  [2]: a,b\n" was here, as "a root header is not indented". With
+		// the unit taken from the document, a single line indented by two IS
+		// the whole document shifted by two, and it describes the same root
+		// array the unshifted text would. Covered now by
+		// TestIndentUnitIsTheDocumentsOwn/whole_block_shifted.
 	} {
 		if _, err := Parse(text); err == nil {
 			t.Errorf("%q parsed", text)
