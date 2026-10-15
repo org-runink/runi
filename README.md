@@ -1590,7 +1590,7 @@ would like to feature you.
 
 | Organisation | Packages | What for |
 |---|---|---|
-| **Runink** | `arimax`, `memo`, `lazy` | The team that builds it — see [From the Runink team](#from-the-runink-team) |
+| **Runink** | `stats`, `salvage`, `barn`, `chain`, `budget`, `bm25`, `season`, `memo` | The team that builds it — see [From the Runink team](#from-the-runink-team) |
 | **Logical Leap** | `arimax`, `memo` | Partner engagement — forecasting and memoization in shared work |
 | _(yours could be here)_ | | |
 
