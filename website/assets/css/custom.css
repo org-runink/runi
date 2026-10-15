@@ -1,0 +1,95 @@
+/*
+ * SPDX-FileCopyrightText: 2026 The RIVER Authors
+ * SPDX-License-Identifier: MIT
+ *
+ * The Runink brand on the Hextra theme: dark-first, high contrast, one action colour (sage
+ * #C0CC7C) for links, buttons and focus, warm greys for everything else. Hextra derives its
+ * link and button shades from the primary hue/saturation/lightness below; the light theme
+ * uses a darker sage so links keep their contrast on a light page.
+ */
+:root {
+  --primary-hue: 68deg;
+  --primary-saturation: 44%;
+  --primary-lightness: 36%;
+  --hx-color-dark: #212121;
+}
+html.dark {
+  --primary-lightness: 64%;
+}
+.dark .hextra-footer,
+html.dark .hextra-footer {
+  background-color: #2c2e30;
+}
+
+/* ── The documentation home (layouts/landing.html) ─────────────────────────────────────── */
+.rv {
+  --rv-bg: #f4f3ee; --rv-panel: #eae9e2; --rv-card: #ffffff; --rv-ink: #212121; --rv-ink-2: #3e3f3a;
+  --rv-muted: #6a6b62; --rv-rule: #d6d5cc; --rv-accent: #6e7a2e;
+  --rv-hero: #212121; --rv-hero-2: #2c2e30; --rv-hero-ink: #e4e2d8; --rv-hero-ink-2: #c6c7b5;
+  --rv-sage: #c0cc7c; --rv-strand: #717168;
+  --rv-font: "Figtree", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --rv-mono: "Fira Code", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --rv-display: "Playfair Display", Georgia, "Times New Roman", serif;
+  background: var(--rv-bg); color: var(--rv-ink); font-family: var(--rv-font);
+  display: flex; flex-direction: column; overflow-x: clip;
+}
+html.dark .rv {
+  --rv-bg: #212121; --rv-panel: #2c2e30; --rv-card: #36383a; --rv-ink: #e4e2d8; --rv-ink-2: #c6c7b5;
+  --rv-muted: #9a9b8e; --rv-rule: #45474a; --rv-accent: #c0cc7c;
+  --rv-hero: #1a1a1a; --rv-hero-2: #262729;
+}
+.rv h1, .rv h2, .rv h3 { text-wrap: balance; margin: 0; letter-spacing: -0.015em; }
+.rv p { margin: 0; }
+.rv code { font-family: var(--rv-mono); font-size: 0.88em; }
+.rv section { padding-inline: 20px; }
+.rv-center { text-align: center; }
+
+.rv-hero {
+  position: relative; isolation: isolate; color: var(--rv-hero-ink);
+  background: radial-gradient(110% 80% at 80% 0%, #3a3d2c 0%, transparent 55%), linear-gradient(170deg, var(--rv-hero), var(--rv-hero-2));
+  padding-block: clamp(48px, 7vw, 88px) clamp(72px, 9vw, 120px);
+}
+.rv-flow { position: absolute; inset: auto 0 0 0; width: 100%; height: 34%; z-index: -1; pointer-events: none; }
+.rv-strand { stroke: var(--rv-strand); stroke-width: 1.3; opacity: 0.5; }
+.rv-strand-lit { stroke: var(--rv-sage); stroke-width: 2.2; opacity: 1; stroke-dasharray: 14 10; animation: rv-flow 6s linear infinite; }
+@keyframes rv-flow { to { stroke-dashoffset: -240; } }
+.rv-hero-inner { max-width: 880px; margin: 0 auto; display: flex; flex-direction: column; align-items: center; text-align: center; gap: 18px; }
+.rv-logo { width: 104px; height: auto; }
+.rv-acro { font-family: var(--rv-mono); font-size: 0.9rem; letter-spacing: 0.06em; color: var(--rv-hero-ink-2); margin-top: -6px; }
+.rv-acro b { color: var(--rv-sage); font-weight: 600; }
+.rv-tagline { font-family: var(--rv-display); font-style: italic; font-size: clamp(1.25rem, 2.6vw, 1.7rem); color: var(--rv-sage); line-height: 1.3; }
+.rv-title { font-size: clamp(2.2rem, 5.4vw, 3.8rem); line-height: 1.04; font-weight: 800; color: #f2f0e6; }
+.rv-sub { font-size: clamp(1rem, 1.6vw, 1.15rem); line-height: 1.65; color: var(--rv-hero-ink-2); max-width: 64ch; }
+.rv-sub code { color: var(--rv-hero-ink); }
+.rv-cta { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; margin-top: 6px; }
+.rv-btn { display: inline-flex; align-items: center; justify-content: center; min-height: 48px; padding: 0 26px; border-radius: 10px; font-weight: 700; font-size: 1rem; text-decoration: none; transition: transform 0.15s ease, background-color 0.15s ease, border-color 0.15s ease; }
+.rv-btn:hover { transform: translateY(-1px); }
+.rv-btn:focus-visible, .rv-card:focus-visible, .rv-link:focus-visible { outline: 3px solid var(--rv-sage); outline-offset: 3px; }
+.rv-btn-primary { background: var(--rv-sage); color: #212121; box-shadow: 0 10px 30px -12px rgba(192, 204, 124, 0.55); }
+.rv-btn-primary:hover { background: #cfd98f; }
+.rv-btn-ghost { color: var(--rv-hero-ink); border: 1px solid #b2b3a4; background: rgba(33, 33, 33, 0.6); }
+.rv-btn-ghost:hover { border-color: var(--rv-hero-ink); }
+
+.rv-hub { max-width: 1180px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 32px; padding-block: clamp(48px, 7vw, 80px); }
+.rv-hub h2 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); font-weight: 800; color: var(--rv-ink); }
+.rv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.rv-card { display: flex; flex-direction: column; gap: 10px; padding: 24px; border-radius: 14px; background: var(--rv-card); border: 1px solid var(--rv-rule); text-decoration: none; color: inherit; transition: border-color 0.15s ease, transform 0.15s ease; }
+.rv-card:hover { border-color: var(--rv-accent); transform: translateY(-2px); }
+.rv-card-k { font-family: var(--rv-mono); font-size: 0.74rem; color: var(--rv-accent); letter-spacing: 0.06em; text-transform: uppercase; }
+.rv-card h3 { font-size: 1.18rem; font-weight: 700; color: var(--rv-ink); }
+.rv-card p { color: var(--rv-ink-2); font-size: 0.96rem; line-height: 1.6; }
+.rv-hub-more { text-align: center; }
+.rv-link { color: var(--rv-accent); font-weight: 700; text-decoration: none; }
+.rv-link:hover { text-decoration: underline; }
+
+.rv-facts { max-width: 1180px; margin: 0 auto; width: 100%; display: flex; flex-direction: column; gap: 24px; padding-block: clamp(40px, 6vw, 64px) 0; }
+.rv-facts h2 { font-size: clamp(1.6rem, 3.2vw, 2.3rem); font-weight: 800; color: var(--rv-ink); }
+.rv-facts-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 32px; margin: 0; }
+.rv-facts-list > div { display: grid; grid-template-columns: 9.5rem minmax(0, 1fr); gap: 16px; padding-block: 14px; border-top: 1px solid var(--rv-rule); }
+.rv-facts-list dt { font-family: var(--rv-mono); font-size: 0.78rem; color: var(--rv-accent); letter-spacing: 0.06em; text-transform: uppercase; padding-top: 3px; }
+.rv-facts-list dd { margin: 0; color: var(--rv-ink-2); font-size: 0.96rem; line-height: 1.6; }
+
+@media (max-width: 960px) { .rv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .rv-facts-list { grid-template-columns: minmax(0, 1fr); } }
+@media (max-width: 620px) { .rv-facts-list > div { grid-template-columns: minmax(0, 1fr); gap: 4px; } }
+@media (max-width: 620px) { .rv-grid { grid-template-columns: minmax(0, 1fr); } }
+@media (prefers-reduced-motion: reduce) { .rv-strand-lit { animation: none; } .rv-btn, .rv-card { transition: none; } }

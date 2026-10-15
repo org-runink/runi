@@ -1,0 +1,107 @@
+# Build website/ with the same pinned Hugo that publishes it.
+#
+# runi's documentation is NOT deployed from this repository. docs.runink.org is GitHub
+# Pages from the public org-runink/docs repo, and core-docs-publish.yml assembles it by
+# cloning each product repo, building <repo>/website/, and copying the result under the
+# product's path. That workflow SKIPS any repo without website/hugo.toml, silently and
+# with only a ::notice -- so a broken site here does not fail the publish, it just
+# quietly stops updating https://docs.runink.org/runi/.
+#
+# This job is therefore the only thing that can catch a bad docs commit. It deliberately
+# uses the NON-extended tarball and the exact sha256 that core-docs-publish.yml pins,
+# because validating with a different binary than the one that publishes is how a site
+# passes here and fails there.
+
+name: Docs
+
+on:
+  pull_request:
+    paths: ["website/**", ".github/workflows/docs.yml"]
+  push:
+    branches: [main]
+    paths: ["website/**", ".github/workflows/docs.yml"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  HUGO_VERSION: "0.147.3"
+  HUGO_TARBALL: hugo_0.147.3_linux-amd64.tar.gz
+  # sha256 of HUGO_TARBALL, the same constant core-docs-publish.yml checks.
+  HUGO_SHA256: 294d995bd3bdcbb88d851fee61213322a53aa474125c0a6b09262e9c648cc83d
+
+jobs:
+  build:
+    name: build (Hugo 0.147.3)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install Hugo (pinned version and sha256)
+        run: |
+          set -eu
+          cd "$RUNNER_TEMP"
+          curl -fsSLo "$HUGO_TARBALL" \
+            "https://github.com/gohugoio/hugo/releases/download/v${HUGO_VERSION}/${HUGO_TARBALL}"
+          echo "${HUGO_SHA256}  ${HUGO_TARBALL}" | sha256sum -c -
+          mkdir -p hugo-bin
+          tar -xzf "$HUGO_TARBALL" -C hugo-bin hugo
+          ./hugo-bin/hugo version | grep -q "v${HUGO_VERSION}-" \
+            || { echo "::error::unexpected Hugo version"; exit 1; }
+          echo "$RUNNER_TEMP/hugo-bin" >> "$GITHUB_PATH"
+
+      - name: The theme is vendored, so this build must need no network
+        run: |
+          set -eu
+          test -d website/_vendor/github.com/imfing/hextra \
+            || { echo "::error::Hextra is not vendored; run 'hugo mod vendor' in website/"; exit 1; }
+          test -s website/assets/lib/flexsearch/flexsearch.bundle.min.js \
+            || { echo "::error::FlexSearch is not vendored; Hextra would fetch it from a CDN"; exit 1; }
+
+      - name: Build
+        env:
+          HUGO_RESOURCEDIR: ${{ runner.temp }}/hugo-resources
+        run: |
+          set -eu
+          hugo --source website --minify --gc --panicOnWarning --noBuildLock \
+            --cacheDir "$RUNNER_TEMP/hugo-cache" --destination "$RUNNER_TEMP/public"
+          # The publisher asserts index.html exists and fails the whole run if it does
+          # not; assert the same here, plus one page from each tree so a silently empty
+          # content directory cannot pass.
+          test -s "$RUNNER_TEMP/public/index.html"
+          test -s "$RUNNER_TEMP/public/docs/guide/index.html"
+          test -s "$RUNNER_TEMP/public/docs/api/index.html"
+          test -s "$RUNNER_TEMP/public/docs/api/stats/index.html"
+
+      - name: The API pages are current with the source
+        run: |
+          set -eu
+          # The pages state they are generated from the source "so it cannot drift from
+          # it". This is what makes that true: regenerate and require no diff. A commit
+          # that adds or renames an exported symbol without re-running the generator
+          # fails here rather than shipping a reference that quietly disagrees with the
+          # code it documents.
+          python3 -I website/gen-api.py
+          if ! git diff --quiet -- website/content/docs/api; then
+            echo "::error::website/content/docs/api is stale; run 'python3 -I website/gen-api.py' and commit the result"
+            git --no-pager diff --stat -- website/content/docs/api
+            exit 1
+          fi
+
+      - name: Every package has an API page
+        run: |
+          set -eu
+          miss=0
+          for d in arimax avro barn bm25 budget chain drift lazy memo rate \
+                   salvage season stats sustain throttle toon tree; do
+            test -s "$RUNNER_TEMP/public/docs/api/$d/index.html" \
+              || { echo "::error::no API page built for runi/$d"; miss=1; }
+          done
+          [ "$miss" = 0 ]
