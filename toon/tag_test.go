@@ -55,14 +55,19 @@ func TestAJSONTagWinsOverAToonTag(t *testing.T) {
 	type both struct {
 		V string `toon:"from_toon" json:"from_json"`
 	}
-	var got both
-	if err := Decode("from_json: yes\n", &got); err != nil {
+	var byJSON both
+	if err := Decode("from_json: yes\n", &byJSON); err != nil {
 		t.Fatalf("Decode: %v", err)
 	}
-	if got.V != "yes" {
-		t.Errorf("V = %q; the json tag must win", got.V)
+	if byJSON.V != "yes" {
+		t.Errorf("V = %q; the json tag must win", byJSON.V)
 	}
-	if err := Decode("from_toon: yes\n", &got); err == nil && got.V == "yes" {
+	// A SEPARATE destination. Reusing the one above left V set to "yes" from
+	// the decode that was supposed to succeed, so this check read its own
+	// earlier result as proof the toon name had been accepted and failed on a
+	// correct implementation.
+	var byToon both
+	if err := Decode("from_toon: yes\n", &byToon); err == nil && byToon.V == "yes" {
 		t.Error("the toon name was accepted although a json tag is present")
 	}
 }

@@ -74,6 +74,13 @@ func TestAnInconsistentIndentIsRefused(t *testing.T) {
 		{"steps 4 then 6", "a:\n    b:\n      c: 1\n"},
 		{"steps 2 then 5", "a:\n  b:\n     c: 1\n"},
 		{"sibling off the unit", "a:\n    b: 1\n      c: 2\nd: 3\n"},
+		// A later line SHALLOWER than the first. The zero is the shallowest
+		// line in the document, not the first one -- which matters because a
+		// whole-block shift is recognised by every line sharing an offset,
+		// and the first line is only the outermost when that holds. Here it
+		// does not: indents are 4, 2, 7, so the zero is 2, the unit is the
+		// first step (2), and 5 is not a multiple of it.
+		{"first line deeper than a later one", "    a: 1\n  b: 2\n       c: 3\n"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var got any
