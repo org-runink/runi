@@ -179,7 +179,26 @@ func scan(text string) ([]line, error) {
 			}
 		}
 	}
-	var out []line
+	// Two passes. The first records how far each line is indented; the second
+	// turns those distances into depths, once the document has been read as a
+	// whole and its own indentation unit is known.
+	//
+	// A single pass cannot do this. It would have to assume the unit, and
+	// assuming two spaces is how a document indented with FOUR was read at
+	// twice its true depth -- silently, because four is a multiple of two, so
+	// nothing was out of place to complain about. Every key then nested under
+	// the wrong parent and the caller received an empty map with a nil error.
+	// A model that indents with three spaces was refused outright, and one
+	// that indented the whole block by two had every line a level too deep.
+	//
+	// Language models do not reliably emit two spaces, so all three shapes
+	// arrive in practice and the first is the dangerous one.
+	type scanned struct {
+		n      int
+		spaces int
+		text   string
+	}
+	var got []scanned
 	for i := start; i < end; i++ {
 		s := raw[i]
 		if strings.TrimSpace(s) == "" {
@@ -189,15 +208,58 @@ func scan(text string) ([]line, error) {
 		// line indented with a tab has no leading spaces at all, so looking
 		// only at those found nothing and let the tab through as depth 0.
 		if lead := len(s) - len(strings.TrimLeft(s, " \t\v\f")); strings.ContainsAny(s[:lead], "\t\v\f") {
-			return nil, &SyntaxError{i + 1, "tab in indentation; TOON indents with two spaces"}
+			return nil, &SyntaxError{i + 1, "tab in indentation; TOON indents with spaces, not tabs"}
 		}
 		spaces := len(s) - len(strings.TrimLeft(s, " "))
-		if spaces%indentWidth != 0 {
-			return nil, &SyntaxError{i + 1, fmt.Sprintf("indent of %d spaces is not a multiple of %d", spaces, indentWidth)}
+		got = append(got, scanned{n: i + 1, spaces: spaces, text: strings.TrimRight(s[spaces:], " ")})
+	}
+
+	// A block indented as a whole -- inside a fence a model has over-indented,
+	// or pasted under a bullet -- carries a common offset on every line,
+	// including the first. It describes the same tree as the unshifted text,
+	// so the shallowest line sets the zero and the rest are measured from it.
+	base := 0
+	if len(got) > 0 {
+		base = got[0].spaces
+		for _, g := range got[1:] {
+			if g.spaces < base {
+				base = g.spaces
+			}
 		}
-		out = append(out, line{n: i + 1, indent: spaces / indentWidth, text: strings.TrimRight(s[spaces:], " ")})
+	}
+
+	// The unit is the largest step that divides every indent in the document:
+	// their greatest common divisor. Two spaces gives 2, four gives 4, three
+	// gives 3, and a document that never indents has no unit to find and does
+	// not need one. Taking the GCD rather than the smallest gap matters when a
+	// document jumps two levels at once -- 0, 4, 8 is a unit of 4, not 8.
+	unit := 0
+	for _, g := range got {
+		unit = gcd(unit, g.spaces-base)
+	}
+	if unit == 0 {
+		unit = indentWidth
+	}
+
+	// No divisibility check here, deliberately: the unit IS the GCD of these
+	// very distances, so every one of them divides by it exactly. A guard
+	// would be unreachable, and this package holds a 100% coverage floor --
+	// an unreachable branch would have to be either excluded or faked, and
+	// both are worse than not writing it.
+	out := make([]line, 0, len(got))
+	for _, g := range got {
+		out = append(out, line{n: g.n, indent: (g.spaces - base) / unit, text: g.text})
 	}
 	return out, nil
+}
+
+// gcd is the greatest common divisor, with gcd(0, n) == n so it can be folded
+// over a list starting from zero.
+func gcd(a, b int) int {
+	for b != 0 {
+		a, b = b, a%b
+	}
+	return a
 }
 
 type parser struct {

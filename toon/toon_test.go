@@ -170,7 +170,16 @@ func TestStructuralErrorsAreRefused(t *testing.T) {
 	cases := []struct{ name, in string }{
 		{"row with the wrong column count", "p[2]{a,b}:\n  1,2,3\n"},
 		{"indent that matches no block", "a: 1\n    b: 2\n"},
-		{"odd indent", "a:\n   b: 2\n"},
+		// "odd indent" ("a:\n   b: 2\n") was here, on the grounds that three
+		// spaces is not two. It does not belong: this list is for documents
+		// that cannot be read two ways without inventing an answer, and that
+		// one can only be read as b nested under a. Nothing is guessed. The
+		// rule conflated "not the usual unit" with "ambiguous"; the scanner
+		// now takes the unit from the document, and indent_test.go decodes
+		// that exact case along with four- and eight-space variants.
+		//
+		// The entry above it stays: "a: 1" is a scalar, so a deeper line
+		// after it has no block to belong to at ANY unit.
 		{"tab indent", "a:\n\tb: 2\n"},
 		{"unterminated string", "s: \"never closed\n"},
 		{"no colon", "just some prose\n"},
