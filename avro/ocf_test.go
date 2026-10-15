@@ -5,6 +5,7 @@ package avro
 import (
 	"bytes"
 	"compress/flate"
+	"errors"
 	"io"
 	"math"
 	"strings"
@@ -486,8 +487,8 @@ func TestOCFRejectsUnknownCodec(t *testing.T) {
 	// compressed bytes and produce garbage records, or an empty result, with no
 	// error. Both the writer and the reader must refuse.
 	var buf bytes.Buffer
-	if err := WriteOCF(&buf, testSchema, "snappy", sampleEvents(), marshalEv); err == nil {
-		t.Error("WriteOCF accepted codec \"snappy\", which this package cannot write")
+	if err := WriteOCF(&buf, testSchema, "snappy", sampleEvents(), marshalEv); !errors.Is(err, ErrInvalid) {
+		t.Errorf("WriteOCF(codec \"snappy\") = %v, want an error wrapping ErrInvalid", err)
 	}
 
 	// A container written elsewhere declaring snappy must be rejected, not read
@@ -510,6 +511,10 @@ func TestOCFRejectsUnknownCodec(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "snappy") {
 		t.Errorf("error = %q, want it to name the unsupported codec", err)
+	}
+	// The container is bad data, not a bad argument.
+	if errors.Is(err, ErrInvalid) {
+		t.Errorf("ReadOCF error %q wraps ErrInvalid; the caller passed nothing invalid", err)
 	}
 }
 

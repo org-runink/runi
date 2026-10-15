@@ -147,7 +147,7 @@ For developers transitioning workflows from pandas, scikit-learn, statsmodels, o
 | `df['x'].describe()` | `stats.Describe(x)` |
 | `np.quantile(x, 0.9)` | `stats.Quantile(x, 0.9)` *(same definition — NumPy's default / R type 7)* |
 | `df['a'].corr(df['b'])` | `stats.Pearson(a, b)` — and `stats.Spearman` for rank |
-| `StandardScaler().fit(train).transform(test)` | `sc := stats.FitStandardiser(train); sc.Transform(test)` |
+| `StandardScaler().fit(train).transform(test)` | `sc := stats.FitStandardiser(train); sc.Transform(test)` (returns the column and an error) |
 | `MinMaxScaler()` | `stats.FitMinMax(train)` |
 | `TimeSeriesSplit(n_splits=5)` | `stats.RollingFolds(n, 5)` |
 | `train_test_split(..., shuffle=False)` | `stats.Split(x, 0.8)` |
@@ -569,7 +569,7 @@ step: two minutes here, ninety seconds there. Each is defensible, nothing adds
 them up, and the slow step early on eats the time the answer needed.
 
 ```go
-b, _ := budget.New(plan, nil)          // one deadline for the whole request
+b, _ := budget.New(plan)               // one deadline for the whole request
 ctx, cancel, ok := b.Begin(parent, "search")
 if ok {                                 // false: too little time left to bother
 	err := search(ctx)                  // ctx expires when search's slice does
@@ -635,7 +635,7 @@ most of the tokens.
 ```go
 text, err := toon.Encode(report)        // to send
 err = toon.Decode(reply, &findings)     // to read back
-err = toon.Strict(reply, &findings)     // and to insist the counts match
+err = toon.DecodeStrict(reply, &findings) // and to insist the counts match
 
 text, err = toon.EncodeWith(report, toon.Options{Delimiter: '\t'}) // cheaper on prose
 ```
@@ -672,9 +672,9 @@ restarted` costs no quote characters at all; under comma it costs two per cell.
 `Decode` is deliberately forgiving, because the input is a model's output: it
 strips a ``` fence, ignores blank lines, reads the spec's keyless root array
 (`[3]: a,b,c`), and **takes the values over the declared count**, since a model
-that miscounts its own list has still told you the list. `Strict` is the one
+that miscounts its own list has still told you the list. `DecodeStrict` is the one
 that refuses a count mismatch, and that is the difference between the two —
-reach for `Strict` when the decoded value drives a decision rather than being
+reach for `DecodeStrict` when the decoded value drives a decision rather than being
 shown to someone.
 
 Numbers are written in the spec's canonical form: the shortest digits that read
@@ -791,7 +791,8 @@ the development VM `drift`'s figures come from. `Intervals` sums its gaps exactl
 minute" of a counter, use `drift.Decayed`. `Intervals.Late` cannot see a gap
 that is still open — a producer that stops never calls `Add` — so compare the
 clock with your last reading yourself. And `Window` holds a preallocated
-buffer, so unlike the rest of these types a copy shares it.
+buffer that a copy would share, so unlike the rest of these types
+`NewWindow` hands it out as a pointer.
 
 ---
 
@@ -865,7 +866,7 @@ for r := range readings {
 |---|---|
 | `Hysteresis` | on/off with separate set and clear levels (a Schmitt trigger), High or Low, and an optional minimum dwell after each change |
 | `Debounce` | follow a condition only after it has held for a time and/or a number of readings, with separate on- and off-delays |
-| `NofM` | on while at least N of the last M readings (M ≤ 64) are past a level: the radar and control-chart run rule |
+| `NofM` | on while at least `Need` of the last `Size` readings (`Size` ≤ 64) are past a level: the radar and control-chart run rule |
 | `Band` | ordered levels — normal, warning, critical — with a deadband on every edge |
 | `Slew` | bound how fast an output follows its input, in units per second, separately up and down |
 
@@ -907,7 +908,7 @@ for ev := range unhealthy {
 | Type | For |
 |---|---|
 | `Bucket` | a token bucket: `rate` per second on average, `burst` at once; kept as the generic cell rate algorithm in integer nanoseconds, so it never drifts |
-| `Budget` | at most N actions per window of length W, windows laid from an origin you choose ("5 per hour, on the hour") |
+| `Quota` | at most N actions per window of length W, windows laid from an origin you choose ("5 per hour, on the hour") |
 | `Cooldown` | each key at most once per period; expired keys are dropped as it goes, and an optional cap bounds how many are tracked |
 | `Backoff` | retry delays, exponential and capped, randomised by full or decorrelated jitter from a source you seed |
 | `Breaker` | a circuit breaker: closed, open and half-open, with a failure threshold, an open period and a number of probes |
@@ -915,7 +916,7 @@ for ev := range unhealthy {
 **Every claim is a test.** A `Bucket` never allows more than
 `burst + ⌊rate·t⌋` over any stretch t, and reaches that bound; drained daily
 for ten simulated years it gives exactly the count the arithmetic does. A
-`Budget` never exceeds N per window. A `Cooldown` is exact to the nanosecond
+`Quota` never exceeds N per window. A `Cooldown` is exact to the nanosecond
 and makes the same decisions as a one-token `Bucket` per key. Backoff delays
 stay within their bounds and pass a chi-squared test for uniformity. Every
 breaker transition is checked with its time. Each type is checked against a
@@ -1719,8 +1720,10 @@ meant to publish ships just as permanently as one that was intended.
 break a caller is listed under **Breaking** in [CHANGELOG.md](CHANGELOG.md),
 with what to do about it.
 
-**Before v1.0.0** a minor release could break the API, and the last one
-before v1 did: `tablelog` became `barn`. Every such break is in the changelog.
+**Before v1.0.0** a minor release could break the API, and the last ones
+did: v0.9.2 renamed `tablelog` to `barn`, and v1.0.0 itself settled the API
+for the freeze (`barn.Store`, `budget.New` and a handful of renames). Every
+such break is in the changelog with what to do about it.
 
 **From v1.0.0**, within v1:
 

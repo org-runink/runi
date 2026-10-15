@@ -19,7 +19,7 @@
 // not started at all and is recorded as skipped, rather than started into a
 // guaranteed overrun.
 //
-//	b, err := budget.New(plan, nil)
+//	b, err := budget.New(plan)
 //	ctx, cancel, ok := b.Begin(parent, "search")
 //	if ok {
 //		err := search(ctx)
@@ -51,7 +51,7 @@
 // Its caps are a plan, not a measurement. Nothing here knows whether a phase
 // can finish in its slice; measure that on the hardware that will run it.
 //
-// The ledger reads time through the clock you give New, so the arithmetic can
-// be tested with a fake clock. Context deadlines are set from durations and
+// The ledger reads time through the clock you give New with WithClock, so the
+// arithmetic can be tested with a fake clock. Context deadlines are set from durations and
 // expire on the real clock.
 package budget

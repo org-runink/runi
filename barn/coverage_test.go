@@ -56,11 +56,11 @@ func (f *faultStore) hit(method string) bool {
 	return f.trip != 0 && f.n == f.trip
 }
 
-func (f *faultStore) Put(ctx context.Context, k string, r io.Reader, n int64, ct string) error {
+func (f *faultStore) Put(ctx context.Context, k string, d []byte) error {
 	if f.hit("Put") {
 		return errIO
 	}
-	return f.inner.Put(ctx, k, r, n, ct)
+	return f.inner.Put(ctx, k, d)
 }
 
 func (f *faultStore) PutIfAbsent(ctx context.Context, k string, d []byte) error {
@@ -316,20 +316,20 @@ func TestCommitRetriesLostRaces(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	var races int
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") && races < 2 {
 			races++
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Put(ctx, Row{Key: "b", Payload: []byte("2")}); err != nil {
 		t.Fatalf("put after lost races: %v", err)
 	}
 	if races != 2 {
 		t.Errorf("simulated %d races, expected 2 — the retry path was not exercised", races)
 	}
-	ms.FailPutIfAbsent = nil
+	ms.setFailPutIfAbsent(nil)
 	if rec, ok, err := tb.Get(ctx, "b"); err != nil || !ok || string(rec.Payload) != "2" {
 		t.Errorf("value after retry: %q ok=%v err=%v", rec.Payload, ok, err)
 	}

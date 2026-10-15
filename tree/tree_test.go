@@ -273,7 +273,7 @@ func TestAbsent(t *testing.T) {
 		by Metric
 	}{{"nope", 3, ByOwn}, {"a", 0, ByOwn}, {"a", -1, BySum}, {"a", 3, Metric(2)}, {"a", 3, Metric(-1)}} {
 		if got := tr.TopK(c.id, c.k, c.by, keep); !slices.Equal(got, keep) {
-			t.Errorf("TopK(%q, %d, %d) = %v", c.id, c.k, c.by, got)
+			t.Errorf("TopK(%q, %d, %v) = %v", c.id, c.k, c.by, got)
 		}
 	}
 }
@@ -289,6 +289,14 @@ func TestRebuild(t *testing.T) {
 	for i := range tr.nodes {
 		if tr.nodes[i].parent != freeSlot && tr.nodes[i].comp != 0 {
 			t.Errorf("compensation %v after Rebuild of exact values", tr.nodes[i].comp)
+		}
+	}
+}
+
+func TestMetricString(t *testing.T) {
+	for m, want := range map[Metric]string{ByOwn: "own", BySum: "sum", 2: "Metric(2)", -1: "Metric(-1)"} {
+		if got := m.String(); got != want {
+			t.Errorf("%d.String() = %q, want %q", int(m), got, want)
 		}
 	}
 }

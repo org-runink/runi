@@ -2,7 +2,10 @@
 
 package tree
 
-import "cmp"
+import (
+	"cmp"
+	"strconv"
+)
 
 // Metric chooses the value TopK ranks nodes by.
 type Metric int
@@ -13,6 +16,17 @@ const (
 	// BySum ranks by a node's subtree sum: "which subtrees account for most".
 	BySum
 )
+
+// String is "own" or "sum".
+func (m Metric) String() string {
+	switch m {
+	case ByOwn:
+		return "own"
+	case BySum:
+		return "sum"
+	}
+	return "Metric(" + strconv.Itoa(int(m)) + ")"
+}
 
 // Entry is one result of TopK.
 type Entry[K cmp.Ordered] struct {

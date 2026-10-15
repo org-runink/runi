@@ -2,6 +2,7 @@ package toon
 
 import (
 	"encoding/json"
+	"errors"
 	"math"
 	"math/rand/v2"
 	"reflect"
@@ -22,7 +23,7 @@ func TestPropertyRoundTripsWithEveryDelimiter(t *testing.T) {
 				continue // the documented refusals: an empty list in a list
 			}
 			var back any
-			if err := Strict(text, &back); err != nil {
+			if err := DecodeStrict(text, &back); err != nil {
 				t.Fatalf("delimiter %q: decode: %v\n%s", d, err, text)
 			}
 			if got, want := canonical(t, back), canonical(t, doc); got != want {
@@ -77,7 +78,7 @@ func TestQuotingFollowsTheDelimiter(t *testing.T) {
 }
 
 func TestAnUnknownDelimiterIsRefused(t *testing.T) {
-	if _, err := EncodeWith(map[string]any{"a": 1}, Options{Delimiter: ';'}); err == nil {
+	if _, err := EncodeWith(map[string]any{"a": 1}, Options{Delimiter: ';'}); !errors.Is(err, ErrInvalid) {
 		t.Fatal("';' was accepted as a delimiter")
 	}
 }
@@ -139,8 +140,8 @@ func TestRootArrayRefusals(t *testing.T) {
 			t.Errorf("%q parsed", text)
 		}
 	}
-	if err := Strict("[3]: a,b\n", new(any)); err == nil {
-		t.Error("Strict accepted a root array that miscounts")
+	if err := DecodeStrict("[3]: a,b\n", new(any)); err == nil {
+		t.Error("DecodeStrict accepted a root array that miscounts")
 	}
 }
 

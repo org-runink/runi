@@ -287,3 +287,14 @@ func TestRepeatedTermsSaturate(t *testing.T) {
 		t.Fatalf("ten occurrences scored %v against %v for one; saturation is not happening", ten, one)
 	}
 }
+
+// The zero Index has no tokeniser set; Search must not reach for it.
+func TestZeroIndexIsEmpty(t *testing.T) {
+	var ix Index
+	if got := ix.Search("anything at all", 5); got != nil {
+		t.Fatalf("zero Index Search = %v, want nil", got)
+	}
+	if ix.Len() != 0 {
+		t.Fatalf("zero Index Len = %d", ix.Len())
+	}
+}

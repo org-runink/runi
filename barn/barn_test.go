@@ -251,7 +251,7 @@ func TestAStoreThatCannotCreateAtomicallyIsSurfaced(t *testing.T) {
 		t.Fatal(err)
 	}
 	boom := errors.New("store is down")
-	st.FailPutIfAbsent = func(key string) error { return boom }
+	st.setFailPutIfAbsent(func(key string) error { return boom })
 
 	if _, err := tb.Put(ctx, Row{Key: "k", Payload: []byte("v")}); err == nil {
 		t.Fatal("Put succeeded although the atomic create failed")
@@ -268,15 +268,15 @@ func TestVacuumRemovesOrphansAndKeepsLiveFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before := st.Len()
+	before := st.numObjects()
 
 	// Nothing is older than the retention window, so nothing may be removed.
 	res, err := tb.Vacuum(ctx, 24*time.Hour)
 	if err != nil {
 		t.Fatalf("Vacuum: %v", err)
 	}
-	if st.Len() != before {
-		t.Fatalf("Vacuum removed %d objects inside the retention window", before-st.Len())
+	if st.numObjects() != before {
+		t.Fatalf("Vacuum removed %d objects inside the retention window", before-st.numObjects())
 	}
 	_ = res
 
@@ -380,7 +380,7 @@ func TestCompactMergesSmallFilesAndPreservesEveryRow(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	before := st.Len()
+	before := st.numObjects()
 
 	res, err := tb.Compact(ctx)
 	if err != nil {
@@ -402,7 +402,7 @@ func TestCompactMergesSmallFilesAndPreservesEveryRow(t *testing.T) {
 			t.Fatalf("k%d after Compact: %v %v %q", i, ok, err, rec.Payload)
 		}
 	}
-	if st.Len() == 0 {
+	if st.numObjects() == 0 {
 		t.Fatal("Compact emptied the store")
 	}
 	_ = before

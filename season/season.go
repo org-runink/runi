@@ -95,25 +95,43 @@ import (
 //
 // 28, because that is the shortest series in which a cycle can actually be
 // found, and a lower figure would be a promise the function cannot keep. The
-// bar a lag must clear rises as the series shortens (see periodThreshold),
-// while the most the estimator can report at lag L falls to about 1 − L/m.
+// autocorrelation bar a lag must clear (see Period) rises as the series
+// shortens, while the most the estimator can report at lag L falls to about
+// 1 − L/m.
 // Below 28 points the bar is above the ceiling: no series of any shape clears
 // it, so Period returns 0 whatever it is given. Callers passing 8 to 27 points
 // got that same 0 before this constant said so; what changes is that the
 // package no longer advertises a floor it cannot answer above.
 const MinPeriodLength = 28
 
-// ErrTooShort is returned when a series has too few points to model.
-var ErrTooShort = errors.New("season: series too short")
+// ErrInvalid is wrapped by every argument error: a period or harmonic count
+// out of range, a series too short to model (ErrTooShort), a series with no
+// values, or a series that cannot identify the requested period. Match it with
+// errors.Is; the message text is not part of the API.
+var ErrInvalid = errors.New("season: invalid argument")
+
+// ErrTooShort is returned when a series has too few points to model. It wraps
+// ErrInvalid.
+var ErrTooShort = invalid("season: series too short")
+
+// invalidError is an argument error that keeps its own message and matches
+// ErrInvalid under errors.Is.
+type invalidError struct{ msg string }
+
+func (e *invalidError) Error() string { return e.msg }
+func (e *invalidError) Unwrap() error { return ErrInvalid }
+
+func invalid(msg string) error { return &invalidError{msg} }
 
 // Period returns the dominant seasonal period of x, or 0 when there is none.
 //
 // It looks for the highest PEAK in the autocorrelation of the
 // once-differenced series (differencing removes a linear trend, which would
 // otherwise correlate with itself at every lag). A lag counts only if its
-// autocorrelation clears periodThreshold — a bar raised for the number of lags
-// tried, so white noise yields a season under 1% of the time — and only if at
-// least two full cycles fit in the series. The winner is then checked against
+// autocorrelation clears a bar that rises as the series shortens and is raised
+// for the number of lags tried, so white noise yields a season under 1% of the
+// time, and only if at least two full cycles fit in the series. The bar is
+// never below 0.2. The winner is then checked against
 // its neighbours by seasonal fit, which settles off-by-one peaks. maxPeriod
 // caps the search; 0 means half the series. NaN values are forward-filled.
 func Period(x []float64, maxPeriod int) int {
@@ -268,10 +286,10 @@ type Fourier struct {
 func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
 	x = fillAlias(x)
 	if period < 2 {
-		return Fourier{}, errors.New("season: period must be at least 2")
+		return Fourier{}, invalid("season: period must be at least 2")
 	}
 	if harmonics < 1 {
-		return Fourier{}, errors.New("season: harmonics must be at least 1")
+		return Fourier{}, invalid("season: harmonics must be at least 1")
 	}
 	if harmonics > period/2 {
 		harmonics = period / 2
@@ -360,7 +378,7 @@ func FitFourier(x []float64, period, harmonics int) (Fourier, error) {
 
 	beta, ok := solve(xtx, xty)
 	if !ok {
-		return Fourier{}, errors.New("season: series cannot identify this period")
+		return Fourier{}, invalid("season: series cannot identify this period")
 	}
 	f := Fourier{Period: period, Mean: beta[0], A: make([]float64, harmonics), B: make([]float64, harmonics)}
 	for j, c := range cols[1:] {
@@ -514,20 +532,21 @@ type line struct {
 // Decompose splits x into trend + season + residual.
 //
 // The order matters and is fixed: the period is found on the differenced
-// series; a season is fitted after removing a straight line fitted so that
-// neither the season nor a spike can tilt it (see phaseLine); changepoints are
-// found after removing that season (so the season is not mistaken for breaks);
-// then the trend is refitted between them and the season refitted once on what
-// the trend leaves. Both season fits clean outliers against the same phase in
-// neighbouring cycles (see phaseHampel), so a spike is removed and a sharp
-// feature that recurs every cycle is kept. NaN values are forward-filled, and
+// series; a season is fitted after removing a straight line whose slope is the
+// median rise over one full period (a seasonal Theil–Sen line), so neither the
+// season nor a spike can tilt it; changepoints are found after removing that
+// season (so the season is not mistaken for breaks); then the trend is refitted
+// between them and the season refitted once on what the trend leaves. Both
+// season fits clean outliers by comparing each point with the same phase in
+// neighbouring cycles rather than with its neighbours in time, so a spike is
+// removed and a sharp feature that recurs every cycle is kept. NaN values are forward-filled, and
 // leading NaNs take the first real value.
 func Decompose(x []float64, opt Options) (*Decomposition, error) {
 	if len(x) < 4 {
 		return nil, ErrTooShort
 	}
 	if allNaN(x) {
-		return nil, errors.New("season: series has no values")
+		return nil, invalid("season: series has no values")
 	}
 	y := fillAlias(x)
 	n := len(y)
@@ -710,7 +729,7 @@ func (d *Decomposition) Forecast(h int) []float64 {
 // phase of the season has no point at all to average.
 func Classical(x []float64, period int) (*Decomposition, error) {
 	if period < 2 {
-		return nil, errors.New("season: period must be at least 2")
+		return nil, invalid("season: period must be at least 2")
 	}
 	if len(x) < 2*period {
 		return nil, ErrTooShort
@@ -730,7 +749,7 @@ func Classical(x []float64, period int) (*Decomposition, error) {
 		}
 	}
 	if first < 0 {
-		return nil, errors.New("season: series has no values")
+		return nil, invalid("season: series has no values")
 	}
 	y := x
 	if first > 0 {

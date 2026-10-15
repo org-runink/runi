@@ -33,8 +33,8 @@ type countingStore struct {
 	objRead atomic.Int64
 }
 
-func (c *countingStore) Put(ctx context.Context, k string, r io.Reader, n int64, ct string) error {
-	return c.inner.Put(ctx, k, r, n, ct)
+func (c *countingStore) Put(ctx context.Context, k string, d []byte) error {
+	return c.inner.Put(ctx, k, d)
 }
 func (c *countingStore) PutIfAbsent(ctx context.Context, k string, d []byte) error {
 	return c.inner.PutIfAbsent(ctx, k, d)
@@ -393,7 +393,7 @@ func TestCommitStopsWhenTheCallerCancelsDuringBackoff(t *testing.T) {
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	var n int
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			n++
 			if n == 2 { // 1 was the guess; this one is inside the retry loop
@@ -402,7 +402,7 @@ func TestCommitStopsWhenTheCallerCancelsDuringBackoff(t *testing.T) {
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Put(cancelCtx, Row{Key: "x", Payload: []byte("1")}); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}

@@ -21,9 +21,9 @@
 //   - Debounce follows a boolean condition only after it has held for a time
 //     and/or a number of consecutive readings, with separate delays for on
 //     and off: the on-delay and off-delay of alarm management.
-//   - NofM is on while at least N of the last M readings (M ≤ 64) are past a
-//     level: it escalates on a condition that holds most of the time, which
-//     a Debounce would keep restarting.
+//   - NofM is on while at least Need of the last Size readings (Size ≤ 64)
+//     are past a level: it escalates on a condition that holds most of the
+//     time, which a Debounce would keep restarting.
 //   - Band classifies a reading into ordered levels — below, inside, above;
 //     normal, warning, critical — with a deadband on every edge.
 //   - Slew bounds how fast an output follows its input, in units per second

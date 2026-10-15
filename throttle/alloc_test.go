@@ -12,7 +12,7 @@ import (
 // closed, open and half-open — so every path runs, not only the steady one.
 func TestZeroAllocs(t *testing.T) {
 	bk := mustBucket(t, 2, 3)
-	bg := mustBudget(t, 3, 2*time.Second, t0)
+	bg := mustQuota(t, 3, 2*time.Second, t0)
 	br := mustBreaker(t, 2, 2*time.Second, 2)
 	full := mustBackoff(t, FullJitter, time.Millisecond, time.Second, 1)
 	dec, _ := NewBackoff(DecorrelatedJitter, time.Millisecond, time.Second, rand.New(rand.NewPCG(1, 2)))
@@ -32,8 +32,8 @@ func TestZeroAllocs(t *testing.T) {
 	}{
 		{"Bucket.Allow", func() { next(); ok = bk.Allow(at); ok = bk.Allow(at) }},
 		{"Bucket.AllowN", func() { next(); ok = bk.AllowN(at, i%4) }},
-		{"Budget.Allow", func() { next(); ok = bg.Allow(at) }},
-		{"Budget.AllowN", func() { next(); ok = bg.AllowN(at, i%3) }},
+		{"Quota.Allow", func() { next(); ok = bg.Allow(at) }},
+		{"Quota.AllowN", func() { next(); ok = bg.AllowN(at, i%3) }},
 		{"Breaker.Allow+Record", func() { next(); ok = br.Allow(at); br.Record(i%5 < 2, at) }},
 		{"Backoff.Next/full", func() {
 			d = full.Next()
@@ -85,9 +85,9 @@ func BenchmarkBucketAllow(b *testing.B) {
 	}
 }
 
-func BenchmarkBudgetAllow(b *testing.B) {
+func BenchmarkQuotaAllow(b *testing.B) {
 	b.ReportAllocs()
-	bg := mustBudget(b, 100, time.Second, t0)
+	bg := mustQuota(b, 100, time.Second, t0)
 	at := t0
 	for range b.N {
 		at = at.Add(time.Millisecond)

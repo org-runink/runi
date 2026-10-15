@@ -35,12 +35,13 @@ import "math"
 // finite ones.
 //
 // Both queues live in one buffer of 2·Size slots, 16 bytes each, allocated by
-// NewWindow; Add and Reset never allocate. Because of that buffer, a Window
-// is not a plain value: a copy shares the buffer with the original, and
-// using both corrupts both. Build one per series with NewWindow.
+// NewWindow; Add and Reset never allocate. NewWindow returns a pointer, and
+// a Window is used through it: a copy of the struct would share the buffer
+// with the original, and using both would corrupt both. Build one per series
+// with NewWindow.
 //
 // The zero value is not usable (Add panics on it); build one with
-// NewWindow. Not safe for concurrent use.
+// NewWindow. Not safe to copy and not safe for concurrent use.
 type Window struct {
 	size    int
 	maxq    deque // decreasing values: front is the maximum
@@ -93,12 +94,12 @@ const maxWindow = math.MaxInt / 32
 // NewWindow returns a window over the last size values, 1 ≤ size ≤
 // math.MaxInt/32 (a bound on what can be addressed, not a suggestion: memory
 // is 32 bytes per slot).
-func NewWindow(size int) (Window, error) {
+func NewWindow(size int) (*Window, error) {
 	if size < 1 || size > maxWindow {
-		return Window{}, invalid("size", size, "1..MaxInt/32")
+		return nil, invalid("size", size, "1..MaxInt/32")
 	}
 	buf := make([]slot, 2*size)
-	return Window{
+	return &Window{
 		size: size,
 		maxq: deque{buf: buf[:size:size]},
 		minq: deque{buf: buf[size:]},

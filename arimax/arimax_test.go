@@ -225,6 +225,6 @@ func TestLjungBoxFlagsStructure(t *testing.T) {
 
 func TestFitRejectsShortSeries(t *testing.T) {
 	if _, err := Fit([]float64{1, 2, 3}, nil, 0, Order{P: 2, Q: 2}); err == nil {
-		t.Fatal("expected errShort, got nil")
+		t.Fatal("expected ErrTooShort, got nil")
 	}
 }

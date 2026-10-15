@@ -18,7 +18,7 @@
 //     burst at once. Over any stretch of time t it allows at most
 //     burst + ⌊rate·t⌋. Kept in integer nanoseconds as the generic cell rate
 //     algorithm's theoretical arrival time, so it does not drift.
-//   - Budget is at most N actions in each window of length W, windows laid
+//   - Quota is at most N actions in each window of length W, windows laid
 //     from an origin the caller chooses: "5 per hour, on the hour". It says
 //     how many remain and when the window ends.
 //   - Cooldown lets each key act at most once per period, for any comparable
@@ -61,10 +61,10 @@
 // not late. Query methods (Tokens, Next, Remaining, WindowEnd) apply the
 // same rule and change nothing.
 //
-// Allow and AllowN on Bucket and Budget, Breaker's Allow and Record and
+// Allow and AllowN on Bucket and Quota, Breaker's Allow and Record and
 // Backoff's Next do O(1) work and allocate nothing; so does Cooldown's
 // Allow, in O(1) amortised, on a key it already tracks or once its table
-// has reached its working size. A test holds each to zero. Bucket, Budget and
+// has reached its working size. A test holds each to zero. Bucket, Quota and
 // Breaker are plain values, safe to copy. A Cooldown holds a table and a
 // Backoff a random source by reference, and a copy shares them. None is
 // safe for concurrent use; give each goroutine its own, or guard it.
@@ -94,7 +94,7 @@
 // It does not judge results. What counts as a failure for a Breaker, and
 // whether an error is worth a retry, is the caller's decision.
 //
-// It does not keep a log of actions. Budget counts per fixed window and
+// It does not keep a log of actions. Quota counts per fixed window and
 // Bucket refills continuously; a sliding window over a log of every action
 // is exact over every stretch but costs memory per action, and is not here.
 //

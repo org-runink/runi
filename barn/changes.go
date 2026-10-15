@@ -26,7 +26,7 @@ type Change struct {
 //
 // It reads only the live files that a commit after `after` added; a file added
 // at or before `after` cannot hold a later row. Rows are NOT merged by key. In
-// a table whose keys are each written once (an append-only log, store/twin)
+// a table whose keys are each written once (an append-only log or event stream)
 // that is exactly every row committed in (after, Version()]. When a key is
 // written more than once, a compaction that merged its rows keeps only the
 // winner, so an overwritten intermediate row can be missing; the newest row of

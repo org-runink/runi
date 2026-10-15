@@ -65,17 +65,17 @@ func FuzzThrottle(f *testing.F) {
 			}
 		}
 
-		// Budget: limit from small, window p, origin offset q.
+		// Quota: limit from small, window p, origin offset q.
 		w := time.Duration(p)
-		bg, err := NewBudget(burst, w, t0.Add(time.Duration(q)))
+		bg, err := NewQuota(burst, w, t0.Add(time.Duration(q)))
 		if (err == nil) != (burst >= 1 && w > 0) {
-			t.Fatalf("NewBudget(%d, %v): %v", burst, w, err)
+			t.Fatalf("NewQuota(%d, %v): %v", burst, w, err)
 		}
 		if err == nil {
-			ref := refBudget{limit: burst, W: p, origin: t0.Add(time.Duration(q)), used: map[int64]int{}}
+			ref := refQuota{limit: burst, W: p, origin: t0.Add(time.Duration(q)), used: map[int64]int{}}
 			for i, c := range cs {
 				if got, want := bg.AllowN(c.at, c.n), ref.allow(c.at, c.n); got != want {
-					t.Fatalf("Budget call %d: %v, want %v", i, got, want)
+					t.Fatalf("Quota call %d: %v, want %v", i, got, want)
 				}
 			}
 		}

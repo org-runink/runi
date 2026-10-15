@@ -15,8 +15,11 @@
 // test data:
 //
 //	sc := stats.FitStandardiser(train)
-//	trainZ := sc.Transform(train)
-//	testZ := sc.Transform(test) // the TRAINING mean and sd, deliberately
+//	trainZ, err := sc.Transform(train)
+//	if err != nil {
+//		return err // ErrNotFitted: train was empty
+//	}
+//	testZ, err := sc.Transform(test) // the TRAINING mean and sd, deliberately
 //
 // Re-fitting on the test set leaks its distribution into the model and makes
 // every score that follows too optimistic. That mistake is easy to make and
@@ -54,7 +57,6 @@
 // comes from the regularised incomplete beta function (the standard library
 // has no t-distribution), pinned by the tests to published critical values
 // and to reference values within a relative error of 1e-9.
-
 package stats
 
 import (

@@ -196,7 +196,7 @@ func (p *parser) rows(k keySpec, depth int, at line) (any, error) {
 
 // checkCount compares the declared length against what was actually there.
 // Models miscount their own output constantly, and the values are the data
-// while the count restates it — so Decode takes the values and only Strict
+// while the count restates it — so Decode takes the values and only DecodeStrict
 // treats the disagreement as an error.
 func (p *parser) checkCount(k keySpec, got int, at line) error {
 	if !p.strict || k.count == got {

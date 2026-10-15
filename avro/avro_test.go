@@ -413,3 +413,28 @@ func TestEncoderResetClearsPreviousRecord(t *testing.T) {
 		t.Errorf("after Reset the buffer is %d bytes, want 7 (1 length + 6 payload)", n)
 	}
 }
+
+// The zero Encoder is ready to use and writes exactly what NewEncoder's does.
+func TestZeroEncoderIsUsable(t *testing.T) {
+	t.Parallel()
+	var zero Encoder
+	fresh := NewEncoder()
+	for _, e := range []*Encoder{&zero, fresh} {
+		if len(e.Bytes()) != 0 {
+			t.Fatalf("a new Encoder holds %d bytes", len(e.Bytes()))
+		}
+		e.Long(-300)
+		e.Bool(true)
+		e.Blob([]byte{1, 2})
+		e.String("x")
+		e.Double(1.5)
+		e.Float(2.5)
+	}
+	if !bytes.Equal(zero.Bytes(), fresh.Bytes()) {
+		t.Fatalf("zero Encoder wrote % x, NewEncoder wrote % x", zero.Bytes(), fresh.Bytes())
+	}
+	zero.Reset()
+	if len(zero.Bytes()) != 0 {
+		t.Fatal("Reset left bytes behind")
+	}
+}

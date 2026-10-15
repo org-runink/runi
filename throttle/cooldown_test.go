@@ -153,3 +153,15 @@ func TestCooldownReleases(t *testing.T) {
 		t.Fatal("an expired key is still in the map")
 	}
 }
+
+// The zero value is documented as unusable; Allow on it panics rather than
+// silently allowing every action.
+func TestCooldownZeroValuePanics(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("Allow on the zero Cooldown did not panic")
+		}
+	}()
+	var cd Cooldown[string]
+	cd.Allow("a", ts(0))
+}

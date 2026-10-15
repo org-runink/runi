@@ -6,7 +6,9 @@ import "math"
 // moving-average terms.
 type Order struct{ P, D, Q int }
 
-// Model is a fitted ARIMAX. Use Fit to build one.
+// Model is a fitted ARIMAX. Use Fit to build one: a Model built any other way,
+// including the zero value, holds none of the fitted state Forecast needs, and
+// Forecast returns ErrNotFitted for it.
 type Model struct {
 	Order Order
 
@@ -49,7 +51,7 @@ func Fit(y []float64, x []float64, k int, ord Order) (*Model, error) {
 	// twice, the stricter copy wins silently and the real one is never reached,
 	// so the error that users actually get comes from a line no test can enter.
 	if n <= ord.D+2 {
-		return nil, errShort
+		return nil, ErrTooShort
 	}
 	if k > 0 && len(x) != n*k {
 		return nil, errExogLen
@@ -117,13 +119,20 @@ func Fit(y []float64, x []float64, k int, ord Order) (*Model, error) {
 // psi-weights. They assume Gaussian errors and KNOWN parameters, and they
 // condition on xFuture being correct, so where xFuture is itself a forecast the
 // true uncertainty is wider than reported.
+//
+// Missing or short xFuture returns ErrNoFutureX, which wraps ErrInvalid. A
+// Model that did not come from Fit returns ErrNotFitted. h <= 0 on a fitted
+// model returns all nil.
 func (m *Model) Forecast(h int, xFuture []float64, alpha float64) (point, lo, hi []float64, err error) {
+	if m == nil || m.errs == nil {
+		return nil, nil, nil, ErrNotFitted
+	}
 	if h <= 0 {
 		return nil, nil, nil, nil
 	}
 	k := len(m.Beta)
 	if k > 0 && len(xFuture) != h*k {
-		return nil, nil, nil, errFuture
+		return nil, nil, nil, ErrNoFutureX
 	}
 
 	// Forecast the ARMA part on the differenced error series, then integrate.

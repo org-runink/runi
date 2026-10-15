@@ -313,7 +313,7 @@ func check(t testing.TB, tr *Tree[int], m *model, topkOf []int, ks []int, full b
 			for _, by := range []Metric{ByOwn, BySum} {
 				got = tr.TopK(x, k, by, got[:0])
 				if want := m.topK(truth, x, k, by); !slices.Equal(got, want) {
-					t.Fatalf("TopK(%d, %d, %d) = %v, want %v", x, k, by, got, want)
+					t.Fatalf("TopK(%d, %d, %v) = %v, want %v", x, k, by, got, want)
 				}
 			}
 		}

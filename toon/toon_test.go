@@ -95,9 +95,9 @@ func TestDecodeTakesTheValuesOverTheCount(t *testing.T) {
 	var strictGot struct {
 		F []string `json:"f"`
 	}
-	err := Strict("f[5]: a,b,c\n", &strictGot)
+	err := DecodeStrict("f[5]: a,b,c\n", &strictGot)
 	if err == nil {
-		t.Fatal("Strict accepted a count that does not match")
+		t.Fatal("DecodeStrict accepted a count that does not match")
 	}
 	var se *SyntaxError
 	if !errors.As(err, &se) || se.Line != 1 {
@@ -782,7 +782,7 @@ func TestEveryEscape(t *testing.T) {
 
 // A declared count with no body at all. The count is the one piece of
 // redundancy TOON has, and a reply that promises two items and delivers none
-// is exactly the truncation it exists to catch -- but only under Strict.
+// is exactly the truncation it exists to catch -- but only under DecodeStrict.
 // Decode takes the values over the count on purpose, because a model that
 // miscounts its own list is the common case and the values are the answer.
 func TestADeclaredCountWithNoBodyIsRefusedOnlyByStrict(t *testing.T) {
@@ -792,9 +792,9 @@ func TestADeclaredCountWithNoBodyIsRefusedOnlyByStrict(t *testing.T) {
 	}
 
 	var got any
-	err := Strict("a[2]:\n", &got)
+	err := DecodeStrict("a[2]:\n", &got)
 	if err == nil {
-		t.Fatal("Strict accepted a[2] with no items")
+		t.Fatal("DecodeStrict accepted a[2] with no items")
 	}
 	if _, ok := err.(*SyntaxError); !ok {
 		t.Fatalf("got %T (%v), want *SyntaxError", err, err)

@@ -66,7 +66,7 @@
 // This is the part that surprises people, and the package makes it explicit in
 // the API rather than hiding it: an ARIMAX forecast h steps ahead requires the
 // exogenous values for those h steps. Forecast takes them as an argument and
-// returns an error if they are missing. Where X is genuinely known in advance
+// returns ErrNoFutureX if they are missing. Where X is genuinely known in advance
 // — planned spend, a published schedule, a committed price — this is a
 // strength. Where it is not, the X forecast's error enters the Y forecast and
 // the prediction intervals below UNDERSTATE the true uncertainty, because they

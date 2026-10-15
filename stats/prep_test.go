@@ -1,6 +1,7 @@
 package stats
 
 import (
+	"encoding/json"
 	"errors"
 	"math"
 	"testing"
@@ -270,6 +271,169 @@ func TestRollingFoldsInvariantHoldsForEveryValidInput(t *testing.T) {
 			if last := folds[len(folds)-1]; last.TestEnd != n {
 				t.Fatalf("n=%d k=%d: last fold ends at %d; want %d", n, k, last.TestEnd, n)
 			}
+		}
+	}
+}
+
+func TestStandardiserReloadsThroughJSON(t *testing.T) {
+	fitted := FitStandardiser([]float64{1, 3, 5, 7, 9})
+	data, err := json.Marshal(fitted)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stored Standardiser
+	if err := json.Unmarshal(data, &stored); err != nil {
+		t.Fatal(err)
+	}
+	// Decoding alone does not make a fitted scaler; that is documented.
+	if _, err := stored.Transform([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("decoded-only Transform err = %v; want ErrNotFitted", err)
+	}
+	sc, err := NewStandardiser(stored.Mean, stored.StdDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	x := []float64{-2, 0, 5, 12}
+	want, _ := fitted.Transform(x)
+	got, err := sc.Transform(x)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("reloaded z[%d] = %v; want %v", i, got[i], want[i])
+		}
+	}
+	back, err := sc.Inverse(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range x {
+		approx(t, back[i], x[i], 1e-12, "reloaded Inverse")
+	}
+
+	// The literal from the issue: {"Mean":5,"StdDev":2}.
+	var lit Standardiser
+	if err := json.Unmarshal([]byte(`{"Mean":5,"StdDev":2}`), &lit); err != nil {
+		t.Fatal(err)
+	}
+	sc, err = NewStandardiser(lit.Mean, lit.StdDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z, err := sc.Transform([]float64{9}); err != nil || z[0] != 2 {
+		t.Fatalf("Transform(9) = %v, %v; want [2], nil", z, err)
+	}
+}
+
+func TestStandardiserLiteralAndZeroValue(t *testing.T) {
+	var zero Standardiser
+	if _, err := zero.Transform([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("zero Transform err = %v; want ErrNotFitted", err)
+	}
+	if _, err := zero.Inverse([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("zero Inverse err = %v; want ErrNotFitted", err)
+	}
+	lit := Standardiser{Mean: 5, StdDev: 2}
+	if _, err := lit.Transform([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("literal Transform err = %v; want ErrNotFitted", err)
+	}
+	sc, err := NewStandardiser(lit.Mean, lit.StdDev)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z, err := sc.Transform([]float64{1}); err != nil || z[0] != -2 {
+		t.Fatalf("Transform(1) = %v, %v; want [-2], nil", z, err)
+	}
+	// A constant column is stored as sd 1 and reloads.
+	c := FitStandardiser([]float64{7, 7, 7})
+	if _, err := NewStandardiser(c.Mean, c.StdDev); err != nil {
+		t.Fatalf("constant-column scaler did not reload: %v", err)
+	}
+}
+
+func TestNewStandardiserRejects(t *testing.T) {
+	inf, nan := math.Inf(1), math.NaN()
+	for _, c := range [][2]float64{
+		{nan, 1}, {inf, 1}, {-inf, 1},
+		{0, 0}, {0, -1}, {0, nan}, {0, inf},
+	} {
+		if _, err := NewStandardiser(c[0], c[1]); !errors.Is(err, ErrInvalid) {
+			t.Errorf("NewStandardiser(%v, %v) err = %v; want ErrInvalid", c[0], c[1], err)
+		}
+	}
+}
+
+func TestMinMaxScalerReloadsThroughJSON(t *testing.T) {
+	for _, train := range [][]float64{{10, 20, 30, 40, 50}, {3, 3, 3}, {0, 0}} {
+		fitted := FitMinMax(train)
+		data, err := json.Marshal(fitted)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var stored MinMaxScaler
+		if err := json.Unmarshal(data, &stored); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := stored.Transform([]float64{1}); !errors.Is(err, ErrNotFitted) {
+			t.Fatalf("decoded-only Transform err = %v; want ErrNotFitted", err)
+		}
+		sc, err := NewMinMaxScaler(stored.Min, stored.Max)
+		if err != nil {
+			t.Fatal(err)
+		}
+		x := []float64{-5, 0, 3, 25, 60}
+		want, _ := fitted.Transform(x)
+		got, err := sc.Transform(x)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range want {
+			if got[i] != want[i] {
+				t.Fatalf("%v: reloaded z[%d] = %v; want %v", train, i, got[i], want[i])
+			}
+		}
+		wantBack, _ := fitted.Inverse(want)
+		gotBack, err := sc.Inverse(got)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i := range wantBack {
+			if gotBack[i] != wantBack[i] {
+				t.Fatalf("%v: reloaded Inverse[%d] = %v; want %v", train, i, gotBack[i], wantBack[i])
+			}
+		}
+	}
+}
+
+func TestMinMaxScalerLiteralAndZeroValue(t *testing.T) {
+	var zero MinMaxScaler
+	if _, err := zero.Transform([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("zero Transform err = %v; want ErrNotFitted", err)
+	}
+	if _, err := zero.Inverse([]float64{1}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("zero Inverse err = %v; want ErrNotFitted", err)
+	}
+	lit := MinMaxScaler{Min: 0, Max: 10}
+	if _, err := lit.Transform([]float64{5}); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("literal Transform err = %v; want ErrNotFitted", err)
+	}
+	sc, err := NewMinMaxScaler(lit.Min, lit.Max)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if z, err := sc.Transform([]float64{5}); err != nil || z[0] != 0.5 {
+		t.Fatalf("Transform(5) = %v, %v; want [0.5], nil", z, err)
+	}
+}
+
+func TestNewMinMaxScalerRejects(t *testing.T) {
+	inf, nan := math.Inf(1), math.NaN()
+	for _, c := range [][2]float64{
+		{nan, 1}, {0, nan}, {-inf, 1}, {0, inf}, {2, 1},
+	} {
+		if _, err := NewMinMaxScaler(c[0], c[1]); !errors.Is(err, ErrInvalid) {
+			t.Errorf("NewMinMaxScaler(%v, %v) err = %v; want ErrInvalid", c[0], c[1], err)
 		}
 	}
 }

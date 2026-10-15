@@ -56,15 +56,15 @@ func TestBucketEnvelopeTight(t *testing.T) {
 	}
 }
 
-// Budget's doc: at most the limit in each window, and up to twice the limit
+// Quota's doc: at most the limit in each window, and up to twice the limit
 // over a stretch of one window's length that straddles a boundary.
-func TestBudgetPerWindow(t *testing.T) {
+func TestQuotaPerWindow(t *testing.T) {
 	r := rand.New(rand.NewPCG(13, 14))
 	for trial := range 300 / raceScale {
 		limit := 1 + r.IntN(5)
 		w := time.Duration(1+r.IntN(6)) * 750 * time.Millisecond
 		origin := t0.Add(time.Duration(r.IntN(3000)) * time.Millisecond)
-		b := mustBudget(t, limit, w, origin)
+		b := mustQuota(t, limit, w, origin)
 		used := map[int64]int{}
 		for _, c := range randomCalls(r, 300) {
 			if b.AllowN(c.at, c.n) && c.n > 0 {
@@ -75,7 +75,7 @@ func TestBudgetPerWindow(t *testing.T) {
 			}
 		}
 	}
-	b := mustBudget(t, 3, time.Minute, t0)
+	b := mustQuota(t, 3, time.Minute, t0)
 	if !b.AllowN(ts(59.999), 3) || !b.AllowN(ts(60), 3) {
 		t.Fatal("the boundary: 2·limit within 1 ms")
 	}
@@ -122,7 +122,7 @@ func TestLateIsLatest(t *testing.T) {
 		}
 
 		b1, b2 := mustBucket(t, 2, 3), mustBucket(t, 2, 3)
-		g1, g2 := mustBudget(t, 2, 3*time.Second, t0), mustBudget(t, 2, 3*time.Second, t0)
+		g1, g2 := mustQuota(t, 2, 3*time.Second, t0), mustQuota(t, 2, 3*time.Second, t0)
 		c1, c2 := mustCooldown(t, 2*time.Second, 3), mustCooldown(t, 2*time.Second, 3)
 		k1, k2 := mustBreaker(t, 2, 2*time.Second, 1), mustBreaker(t, 2, 2*time.Second, 1)
 		for i, c := range cs {
@@ -157,7 +157,7 @@ func TestLateIsLatest(t *testing.T) {
 func TestQueriesChangeNothing(t *testing.T) {
 	r := rand.New(rand.NewPCG(19, 20))
 	b := mustBucket(t, 1, 3)
-	g := mustBudget(t, 2, time.Second, t0)
+	g := mustQuota(t, 2, time.Second, t0)
 	cd := mustCooldown(t, time.Second, 2)
 	for _, c := range randomCalls(r, 500) {
 		b.AllowN(c.at, c.n)

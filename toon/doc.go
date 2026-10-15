@@ -28,7 +28,7 @@
 // add one about half the time. It accepts a declared length that disagrees
 // with the number of values, because models miscount, and the values are the
 // data while the count is a restatement of it — [Decode] takes the values and
-// [Strict] refuses the disagreement.
+// [DecodeStrict] refuses the disagreement.
 //
 // It does NOT guess at structure. A row with the wrong number of columns, an
 // indentation step that matches no open block, or a quoted string that never

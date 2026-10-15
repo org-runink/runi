@@ -193,7 +193,7 @@ func TestCommitStopsWhenTheCallerCancels(t *testing.T) {
 	}
 	cancelCtx, cancel := context.WithCancel(ctx)
 	var n int
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			n++
 			if n == 1 {
@@ -202,7 +202,7 @@ func TestCommitStopsWhenTheCallerCancels(t *testing.T) {
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Put(cancelCtx, Row{Key: "x", Payload: []byte("1")}); !errors.Is(err, context.Canceled) {
 		t.Errorf("err = %v, want context.Canceled", err)
 	}

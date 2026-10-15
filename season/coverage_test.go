@@ -1,6 +1,8 @@
 package season
 
 import (
+	"errors"
+	"math"
 	"testing"
 )
 
@@ -100,5 +102,32 @@ func TestMedianOfEvenLength(t *testing.T) {
 	}
 	if got := medianOf([]float64{9, 1, 5}); got != 5 {
 		t.Errorf("medianOf odd = %v, want 5", got)
+	}
+}
+
+func TestArgumentErrorsWrapErrInvalid(t *testing.T) {
+	nan := math.NaN()
+	_, e1 := FitFourier(make([]float64, 20), 1, 1)
+	_, e2 := FitFourier(make([]float64, 20), 4, 0)
+	_, e3 := FitFourier(make([]float64, 3), 4, 2)
+	_, e4 := Decompose([]float64{1, 2}, Options{})
+	_, e5 := Decompose([]float64{nan, nan, nan, nan, nan}, Options{})
+	_, e6 := Classical(make([]float64, 20), 1)
+	_, e7 := Classical(make([]float64, 5), 4)
+	_, e8 := Classical([]float64{nan, nan, nan, nan}, 2)
+	_, e9 := FitFourier(series(8, 10, 0.5, 0, 0, 1, 1), 1000, 3)
+	for i, err := range []error{e1, e2, e3, e4, e5, e6, e7, e8, e9} {
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("case %d: err = %v; want ErrInvalid", i+1, err)
+		}
+	}
+	for i, err := range []error{e3, e4, e7} {
+		if !errors.Is(err, ErrTooShort) {
+			t.Errorf("short case %d: err = %v; want ErrTooShort", i+1, err)
+		}
+	}
+	// Wrapping does not change the message.
+	if ErrTooShort.Error() != "season: series too short" {
+		t.Errorf("ErrTooShort message = %q", ErrTooShort.Error())
 	}
 }

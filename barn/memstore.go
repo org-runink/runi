@@ -25,43 +25,54 @@ import (
 // shortest correct example of what a real Store must do.
 type MemStore struct {
 	mu      sync.RWMutex
-	objects map[string][]byte
+	objects map[string][]byte // created on first write, so the zero value works
 
-	// FailPutIfAbsent, when set, is consulted before every atomic create. A
+	// failPutIfAbsent, when set, is consulted before every atomic create. A
 	// non-nil return is returned to the caller instead of performing it, which
 	// is how a test injects a crash between the data write and the log write.
-	FailPutIfAbsent func(key string) error
+	// It is read under mu and called after mu is released, so a hook may use
+	// the store itself, or replace itself, without deadlocking.
+	failPutIfAbsent func(key string) error
 }
 
-// NewMemStore returns an empty in-memory store.
+// NewMemStore returns an empty in-memory store. It is equivalent to new(MemStore):
+// the zero value is an empty store ready to use.
 func NewMemStore() *MemStore {
 	return &MemStore{objects: make(map[string][]byte)}
 }
 
-// Put writes key, overwriting any existing object.
-func (m *MemStore) Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error {
-	if err := ctx.Err(); err != nil {
-		return err
+// set stores a copy of data under key. The caller holds mu for writing.
+func (m *MemStore) set(key string, data []byte) {
+	if m.objects == nil {
+		m.objects = make(map[string][]byte)
 	}
-	var buf bytes.Buffer
-	if _, err := io.Copy(&buf, r); err != nil {
+	m.objects[key] = append([]byte(nil), data...)
+}
+
+// Put writes key, overwriting any existing object.
+func (m *MemStore) Put(ctx context.Context, key string, data []byte) error {
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.objects[key] = buf.Bytes()
+	m.set(key, data)
 	return nil
 }
 
-// PutIfAbsent creates key only if it does not exist, and returns ErrExists if
-// it does. This is the atomic create the table's correctness depends on: two
-// writers racing for the same log version, exactly one winning.
+// PutIfAbsent creates key only if it does not exist, and returns an error
+// wrapping ErrExists if it does. This is the atomic create the table's
+// correctness depends on: two writers racing for the same log version, exactly
+// one winning.
 func (m *MemStore) PutIfAbsent(ctx context.Context, key string, data []byte) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if m.FailPutIfAbsent != nil {
-		if err := m.FailPutIfAbsent(key); err != nil {
+	m.mu.RLock()
+	fail := m.failPutIfAbsent
+	m.mu.RUnlock()
+	if fail != nil {
+		if err := fail(key); err != nil {
 			return err
 		}
 	}
@@ -70,11 +81,12 @@ func (m *MemStore) PutIfAbsent(ctx context.Context, key string, data []byte) err
 	if _, ok := m.objects[key]; ok {
 		return fmt.Errorf("barn: %q: %w", key, ErrExists)
 	}
-	m.objects[key] = append([]byte(nil), data...)
+	m.set(key, data)
 	return nil
 }
 
-// Get returns a reader over key.
+// Get returns a reader over key, or an error wrapping ErrNotFound if there is
+// no such object.
 func (m *MemStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -83,13 +95,13 @@ func (m *MemStore) Get(ctx context.Context, key string) (io.ReadCloser, error) {
 	defer m.mu.RUnlock()
 	b, ok := m.objects[key]
 	if !ok {
-		return nil, fmt.Errorf("barn: %q: not found", key)
+		return nil, fmt.Errorf("barn: %q: %w", key, ErrNotFound)
 	}
 	return io.NopCloser(bytes.NewReader(append([]byte(nil), b...))), nil
 }
 
-// List returns the keys under prefix, sorted. The order matters: the log is
-// read by version, and an unsorted List would replay commits out of order.
+// List returns the keys under prefix, sorted. The Store contract allows any
+// order; sorting makes MemStore's answers deterministic.
 func (m *MemStore) List(ctx context.Context, prefix string) ([]string, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -118,22 +130,31 @@ func (m *MemStore) Delete(ctx context.Context, key string) error {
 	return nil
 }
 
-// Len reports how many objects are stored, for tests that assert a Vacuum
-// actually removed something.
-func (m *MemStore) Len() int {
+var _ Store = (*MemStore)(nil)
+
+// numObjects reports how many objects are stored, for tests that assert a
+// Vacuum actually removed something.
+func (m *MemStore) numObjects() int {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return len(m.objects)
 }
 
-var _ Store = (*MemStore)(nil)
-
-// Overwrite replaces an object unconditionally, which no Store method can do.
-// It exists so a test can corrupt a specific object and check that the table
-// reports it rather than reading past it; production code must go through
-// PutIfAbsent so a lost race is still a lost race.
-func (m *MemStore) Overwrite(key string, data []byte) {
+// overwrite replaces an object unconditionally. It exists so a test can corrupt
+// a specific object and check that the table reports it rather than reading
+// past it; Put could do the same, but going through this says what the test
+// means.
+func (m *MemStore) overwrite(key string, data []byte) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.objects[key] = append([]byte(nil), data...)
+	m.set(key, data)
+}
+
+// setFailPutIfAbsent installs (or, with nil, removes) the fault-injection hook
+// PutIfAbsent consults. It takes the lock, so a test may change the hook while
+// other goroutines are writing.
+func (m *MemStore) setFailPutIfAbsent(f func(key string) error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.failPutIfAbsent = f
 }

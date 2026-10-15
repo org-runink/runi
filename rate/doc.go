@@ -49,9 +49,10 @@
 // them in, and counts them in Skipped: a missed reading should not poison a
 // summary, and a series that is mostly NaN should be visible as one. Readings
 // whose time is not after the previous reading are skipped and counted too.
-// Counter, Peak and Intervals are plain values, safe to copy; a Window holds
-// its buffers by reference and a copy shares them. None is safe for
-// concurrent use; give each goroutine its own, or guard it.
+// Counter, Peak and Intervals are plain values, safe to copy; NewWindow
+// returns a *Window, which holds its buffer by reference and is shared, not
+// copied. None is safe for concurrent use; give each goroutine its own, or
+// guard it.
 //
 // # What this package does not do
 //

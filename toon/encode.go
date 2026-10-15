@@ -21,6 +21,7 @@ type Options struct {
 	// table row. It is one of ',' (the default, also chosen by the zero value),
 	// '\t' or '|', and it is declared in every array header -- items[2|]{a|b}
 	// -- so any TOON reader knows how to split the rows without being told.
+	// Any other rune makes EncodeWith fail with an error wrapping ErrInvalid.
 	//
 	// Tab is usually the cheapest. A value is quoted when it contains the
 	// active delimiter, so with commas as the delimiter every cell holding
@@ -82,7 +83,7 @@ func (o Options) delim() (byte, error) {
 	case '|':
 		return '|', nil
 	}
-	return 0, fmt.Errorf("toon: delimiter %q is not one TOON declares; use ',', '\\t' or '|'", o.Delimiter)
+	return 0, fmt.Errorf("%w: delimiter %q is not one TOON declares; use ',', '\\t' or '|'", ErrInvalid, o.Delimiter)
 }
 
 // viaJSON is the route for the shapes toTree declines: marshal, then re-read

@@ -114,13 +114,13 @@ func TestCommitRefusesAStaleDataFile(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 	// Every log attempt loses its race, and time passes while it retries.
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if contains(key, "_log/") {
 			ck.advance(MaxCommitAge)
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	_, err = tb.Put(ctx, Row{Key: "slow", Payload: []byte("1")})
 	if err == nil {
 		t.Fatal("a commit whose data file had aged out was accepted")
@@ -154,17 +154,17 @@ func TestCommitReportsAConflictOnRemovedFiles(t *testing.T) {
 		t.Fatalf("open other: %v", err)
 	}
 	var raced bool
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if contains(key, "_log/") && !raced {
 			raced = true
-			ms.FailPutIfAbsent = nil
+			ms.setFailPutIfAbsent(nil)
 			if _, err := other.Compact(ctx); err != nil {
 				return nil
 			}
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	// Whatever it returns, it must not silently commit a plan built on a state
 	// that no longer exists.
 	if _, err := tb.Compact(ctx); err == nil {

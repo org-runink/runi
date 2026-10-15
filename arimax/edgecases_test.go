@@ -27,7 +27,7 @@ func TestFitRejectsBadArguments(t *testing.T) {
 		{"negative P", y, nil, 0, Order{P: -1}, errOrder},
 		{"negative D", y, nil, 0, Order{D: -1}, errOrder},
 		{"negative Q", y, nil, 0, Order{Q: -1}, errOrder},
-		{"series shorter than the order", y[:4], nil, 0, Order{P: 1, Q: 1}, errShort},
+		{"series shorter than the order", y[:4], nil, 0, Order{P: 1, Q: 1}, ErrTooShort},
 		{"exog rows do not match", y, make([]float64, 10), 1, Order{P: 1}, errExogLen},
 	}
 	for _, tc := range cases {
@@ -60,12 +60,12 @@ func TestForecastGuards(t *testing.T) {
 	})
 
 	t.Run("missing future X is an error, not a guess", func(t *testing.T) {
-		if _, _, _, err := m.Forecast(3, nil, 0.05); !errors.Is(err, errFuture) {
-			t.Fatalf("Forecast without xFuture err = %v; want errFuture", err)
+		if _, _, _, err := m.Forecast(3, nil, 0.05); !errors.Is(err, ErrNoFutureX) {
+			t.Fatalf("Forecast without xFuture err = %v; want ErrNoFutureX", err)
 		}
 		// Right length is required too, not merely non-nil.
-		if _, _, _, err := m.Forecast(3, []float64{1, 2}, 0.05); !errors.Is(err, errFuture) {
-			t.Fatalf("Forecast with short xFuture err = %v; want errFuture", err)
+		if _, _, _, err := m.Forecast(3, []float64{1, 2}, 0.05); !errors.Is(err, ErrNoFutureX) {
+			t.Fatalf("Forecast with short xFuture err = %v; want ErrNoFutureX", err)
 		}
 	})
 }
@@ -284,5 +284,45 @@ func TestFitWhiteNoiseOrderZero(t *testing.T) {
 		if !(lo[i] <= pt[i] && pt[i] <= hi[i]) {
 			t.Fatalf("step %d: point %v outside [%v,%v]", i, pt[i], lo[i], hi[i])
 		}
+	}
+}
+
+func TestArgumentErrorsWrapErrInvalid(t *testing.T) {
+	for _, err := range []error{errOrder, ErrTooShort, errExogLen, ErrNoFutureX} {
+		if !errors.Is(err, ErrInvalid) {
+			t.Errorf("%v does not wrap ErrInvalid", err)
+		}
+	}
+	if errors.Is(ErrNotFitted, ErrInvalid) {
+		t.Error("ErrNotFitted wraps ErrInvalid; it should stand alone like stats.ErrNotFitted")
+	}
+	// The messages are unchanged by the wrapping.
+	if got := ErrTooShort.Error(); got != "arimax: series too short for the requested order" {
+		t.Errorf("ErrTooShort message = %q", got)
+	}
+	y := make([]float64, 50)
+	for i := range y {
+		y[i] = float64(i%7) + 1
+	}
+	if _, err := Fit(y, nil, 0, Order{P: -1}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("Fit(P=-1) err = %v; want ErrInvalid", err)
+	}
+}
+
+func TestForecastOnUnfittedModel(t *testing.T) {
+	var zero Model
+	for _, h := range []int{0, 3} {
+		pt, lo, hi, err := zero.Forecast(h, nil, 0.05)
+		if !errors.Is(err, ErrNotFitted) || pt != nil || lo != nil || hi != nil {
+			t.Fatalf("zero Model.Forecast(%d) = %v,%v,%v,%v; want ErrNotFitted", h, pt, lo, hi, err)
+		}
+	}
+	lit := &Model{Order: Order{P: 1}, AR: []float64{0.5}, Sigma2: 1}
+	if _, _, _, err := lit.Forecast(3, nil, 0.05); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("literal Model.Forecast err = %v; want ErrNotFitted", err)
+	}
+	var nilModel *Model
+	if _, _, _, err := nilModel.Forecast(3, nil, 0.05); !errors.Is(err, ErrNotFitted) {
+		t.Fatalf("nil Model.Forecast err = %v; want ErrNotFitted", err)
 	}
 }

@@ -66,18 +66,18 @@ var (
 	// of the call, and each one grew from nothing on every call: a container
 	// written per commit spent more of itself growing buffers than encoding
 	// records.
-	scratch = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+	scratch = sync.Pool{New: func() any { return new(Encoder) }}
 )
 
-// borrowEncoder returns an Encoder over a pooled buffer. The caller must
-// release it, and must not use it — or anything aliasing its Bytes — after.
+// borrowEncoder returns a pooled, empty Encoder. The caller must release it,
+// and must not use it — or anything aliasing its Bytes — after.
 func borrowEncoder() *Encoder {
-	b := scratch.Get().(*bytes.Buffer)
-	b.Reset()
-	return &Encoder{buf: b}
+	e := scratch.Get().(*Encoder)
+	e.Reset()
+	return e
 }
 
-func releaseEncoder(e *Encoder) { scratch.Put(e.buf) }
+func releaseEncoder(e *Encoder) { scratch.Put(e) }
 
 // deflateTo compresses src into dst using a pooled compressor.
 func deflateTo(dst *bytes.Buffer, src []byte) {
@@ -122,10 +122,12 @@ type Unmarshal[T any] func(d *Decoder) (T, error)
 // writer's schema (JSON) is embedded in the header — the file is self-describing
 // — followed by the (optionally DEFLATE-compressed) record block and a sync
 // marker. schemaJSON must be the canonical Avro schema for T. A fresh random sync
-// marker is generated per file.
+// marker is generated per file. codec must be CodecNull or CodecDeflate; any
+// other is refused, before anything is written, with an error wrapping
+// ErrInvalid.
 func WriteOCF[T any](w io.Writer, schemaJSON, codec string, records []T, marshal Marshal[T]) error {
 	if codec != CodecNull && codec != CodecDeflate {
-		return fmt.Errorf("avro: unsupported codec %q", codec)
+		return fmt.Errorf("%w: unsupported codec %q", ErrInvalid, codec)
 	}
 	var sync [16]byte
 	if _, err := randRead(sync[:]); err != nil {
@@ -158,16 +160,15 @@ func WriteOCF[T any](w io.Writer, schemaJSON, codec string, records []T, marshal
 	}
 	payload := body.Bytes()
 	if codec == CodecDeflate {
-		cb := scratch.Get().(*bytes.Buffer)
-		defer scratch.Put(cb)
-		cb.Reset()
+		cb := borrowEncoder()
+		defer releaseEncoder(cb)
 		// The compressor's sink is a bytes.Buffer, whose Write is documented
 		// never to return an error, so neither the Write nor the Close inside
 		// deflateTo can fail. They are not checked because the checks would be
 		// two branches no test could ever enter, which read as handled cases
 		// and are not. If this ever compresses straight to w instead of to
 		// memory, both errors become real and must be returned.
-		deflateTo(cb, payload)
+		deflateTo(&cb.buf, payload)
 		payload = cb.Bytes()
 	}
 

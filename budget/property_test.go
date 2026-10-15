@@ -45,7 +45,7 @@ func TestPropertyAllowanceNeverExceedsWhatIsLeft(t *testing.T) {
 	for i := 0; i < 3000; i++ {
 		plan := randPlan(r)
 		now := time.Unix(1700000000, 0)
-		b, err := New(plan, frozen(&now))
+		b, err := New(plan, WithClock(frozen(&now)))
 		if err != nil {
 			continue // an impossible plan is refused, which is correct
 		}
@@ -75,7 +75,7 @@ func TestPropertyTheDeadlineNeverMoves(t *testing.T) {
 	for i := 0; i < 2000; i++ {
 		plan := randPlan(r)
 		now := time.Unix(1700000000, 0)
-		b, err := New(plan, frozen(&now))
+		b, err := New(plan, WithClock(frozen(&now)))
 		if err != nil {
 			continue
 		}
@@ -109,7 +109,7 @@ func TestPropertyAPhaseContextNeverOutlivesTheBudget(t *testing.T) {
 		// a context.WithTimeout and so is measured against time.Now, while an
 		// injected clock governs only the ledger's arithmetic. Comparing the
 		// two would compare a real instant with a fictional one.
-		b, err := New(plan, nil)
+		b, err := New(plan)
 		if err != nil {
 			continue
 		}
@@ -142,7 +142,7 @@ func TestPropertyFinalizeIsIdempotentAndReportsOnlyUnfinishedPhases(t *testing.T
 	for i := 0; i < 2000; i++ {
 		plan := randPlan(r)
 		now := time.Unix(1700000000, 0)
-		b, err := New(plan, frozen(&now))
+		b, err := New(plan, WithClock(frozen(&now)))
 		if err != nil {
 			continue
 		}

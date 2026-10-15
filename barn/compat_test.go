@@ -72,7 +72,7 @@ func TestTablesWrittenAsTablelogStillOpen(t *testing.T) {
 		if err != nil || !strings.Contains(h.Schema, "org.runink.store.tablelog") {
 			t.Fatalf("%s was not rewritten with the old schema: %v %q", k, err, h.Schema)
 		}
-		if err := st.Put(ctx, k, bytes.NewReader(buf.Bytes()), int64(buf.Len()), ""); err != nil {
+		if err := st.Put(ctx, k, buf.Bytes()); err != nil {
 			t.Fatal(err)
 		}
 		rewritten[kind]++

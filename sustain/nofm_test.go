@@ -6,9 +6,9 @@ import (
 	"testing"
 )
 
-func mustNofM(t testing.TB, dir Direction, level float64, n, m int) NofM {
+func mustNofM(t testing.TB, dir Direction, level float64, need, size int) NofM {
 	t.Helper()
-	w, err := NewNofM(dir, level, n, m)
+	w, err := NewNofM(dir, level, need, size)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -26,8 +26,8 @@ func TestNofMKnownAnswer(t *testing.T) {
 	if !eqBools(got, want) {
 		t.Fatalf("%v, want %v", got, want)
 	}
-	if w.Count() != 2 || w.Len() != 3 || w.N() != 2 || w.M() != 3 || w.Transitions() != 3 {
-		t.Fatalf("count %d len %d n %d m %d transitions %d", w.Count(), w.Len(), w.N(), w.M(), w.Transitions())
+	if w.Count() != 2 || w.Len() != 3 || w.Need() != 2 || w.Size() != 3 || w.Transitions() != 3 {
+		t.Fatalf("count %d len %d need %d size %d transitions %d", w.Count(), w.Len(), w.Need(), w.Size(), w.Transitions())
 	}
 	// Low: three of four at or below 1.
 	l := mustNofM(t, Low, 1, 3, 4)
@@ -75,9 +75,9 @@ func TestNofMSkips(t *testing.T) {
 
 func TestNofMInvalid(t *testing.T) {
 	for _, c := range []struct {
-		dir   Direction
-		level float64
-		n, m  int
+		dir        Direction
+		level      float64
+		need, size int
 	}{
 		{0, 0, 1, 1},
 		{High, math.NaN(), 1, 1},
@@ -87,7 +87,7 @@ func TestNofMInvalid(t *testing.T) {
 		{High, 0, 0, 3},
 		{High, 0, 4, 3},
 	} {
-		if _, err := NewNofM(c.dir, c.level, c.n, c.m); !errors.Is(err, ErrInvalid) {
+		if _, err := NewNofM(c.dir, c.level, c.need, c.size); !errors.Is(err, ErrInvalid) {
 			t.Errorf("NewNofM(%+v): %v, want ErrInvalid", c, err)
 		}
 	}

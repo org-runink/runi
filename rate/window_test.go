@@ -30,7 +30,7 @@ func brute(xs []float64, size int) (lo, hi float64, n int) {
 
 func same(a, b float64) bool { return a == b || math.IsNaN(a) && math.IsNaN(b) }
 
-func mustWindow(t testing.TB, size int) Window {
+func mustWindow(t testing.TB, size int) *Window {
 	t.Helper()
 	w, err := NewWindow(size)
 	if err != nil {
@@ -182,8 +182,8 @@ func TestWindowMatchesBruteForce(t *testing.T) {
 
 func TestWindowRejects(t *testing.T) {
 	for _, s := range []int{0, -1, math.MinInt, maxWindow + 1, math.MaxInt} {
-		if _, err := NewWindow(s); !errors.Is(err, ErrInvalid) {
-			t.Errorf("size %d: %v", s, err)
+		if w, err := NewWindow(s); !errors.Is(err, ErrInvalid) || w != nil {
+			t.Errorf("size %d: %v, %v", s, w, err)
 		}
 	}
 }
