@@ -1,11 +1,9 @@
 package barn
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"io"
-	"strings"
 	"testing"
 )
 
@@ -21,7 +19,7 @@ func TestMemStoreHonoursContext(t *testing.T) {
 	dead, cancel := context.WithCancel(ctx)
 	cancel()
 
-	if err := ms.Put(dead, "a", strings.NewReader("x"), 1, ""); !errors.Is(err, context.Canceled) {
+	if err := ms.Put(dead, "a", []byte("x")); !errors.Is(err, context.Canceled) {
 		t.Errorf("Put: %v", err)
 	}
 	if err := ms.PutIfAbsent(dead, "b", []byte("x")); !errors.Is(err, context.Canceled) {
@@ -42,26 +40,83 @@ func TestMemStoreHonoursContext(t *testing.T) {
 	}
 }
 
-// A reader that fails part-way through must fail the Put rather than storing
-// the prefix it managed to read.
-func TestMemStorePutReaderError(t *testing.T) {
+// Put and PutIfAbsent keep their own copy: a caller that reuses its buffer
+// after the call must not change what was stored.
+func TestMemStoreCopiesWrites(t *testing.T) {
+	ctx := context.Background()
 	ms := NewMemStore()
-	err := ms.Put(context.Background(), "k", iotest(), 10, "")
-	if err == nil {
-		t.Fatal("a failing reader was accepted")
+	buf := []byte("one")
+	if err := ms.Put(ctx, "p", buf); err != nil {
+		t.Fatalf("put: %v", err)
 	}
-	if _, err := ms.Get(context.Background(), "k"); err == nil {
-		t.Error("a partially read object was stored")
+	if err := ms.PutIfAbsent(ctx, "q", buf); err != nil {
+		t.Fatalf("put if absent: %v", err)
+	}
+	copy(buf, "two")
+	for _, k := range []string{"p", "q"} {
+		rc, err := ms.Get(ctx, k)
+		if err != nil {
+			t.Fatalf("get %s: %v", k, err)
+		}
+		b, _ := io.ReadAll(rc)
+		rc.Close()
+		if string(b) != "one" {
+			t.Errorf("%s = %q after the caller reused its buffer, want one", k, b)
+		}
 	}
 }
 
-func iotest() io.Reader {
-	return io.MultiReader(strings.NewReader("ab"), errReaderOnly{})
+// The zero value is an empty store, and every method works on it, the
+// writing ones included: the map is created on first write.
+func TestMemStoreZeroValue(t *testing.T) {
+	ctx := context.Background()
+	for _, write := range []func(*MemStore) error{
+		func(m *MemStore) error { return m.Put(ctx, "k", []byte("v")) },
+		func(m *MemStore) error { return m.PutIfAbsent(ctx, "k", []byte("v")) },
+	} {
+		var ms MemStore
+		if _, err := ms.Get(ctx, "k"); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("Get on the zero value = %v, want ErrNotFound", err)
+		}
+		if keys, err := ms.List(ctx, ""); err != nil || len(keys) != 0 {
+			t.Fatalf("List on the zero value = %v, %v", keys, err)
+		}
+		if err := ms.Delete(ctx, "k"); err != nil {
+			t.Fatalf("Delete on the zero value: %v", err)
+		}
+		if err := write(&ms); err != nil {
+			t.Fatalf("first write on the zero value: %v", err)
+		}
+		if ms.numObjects() != 1 {
+			t.Fatalf("zero value holds %d objects after one write", ms.numObjects())
+		}
+	}
+	var ms MemStore
+	ms.overwrite("k", []byte("v"))
+	if ms.numObjects() != 1 {
+		t.Fatal("overwrite on the zero value stored nothing")
+	}
+
+	// A table works on it end to end.
+	tb, err := Open(&MemStore{}, "acme", "orders")
+	if err != nil {
+		t.Fatalf("open: %v", err)
+	}
+	if _, err := tb.Put(ctx, Row{Key: "a", Payload: []byte("1")}); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	if rec, ok, err := tb.Get(ctx, "a"); err != nil || !ok || string(rec.Payload) != "1" {
+		t.Fatalf("get = %+v, %v, %v", rec, ok, err)
+	}
 }
 
-type errReaderOnly struct{}
-
-func (errReaderOnly) Read([]byte) (int, error) { return 0, errors.New("read failed") }
+// failHook reads the fault-injection hook under the lock, for a test whose
+// hook swaps itself out and back.
+func (m *MemStore) failHook() func(string) error {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.failPutIfAbsent
+}
 
 func TestMemStoreSemantics(t *testing.T) {
 	ctx := context.Background()
@@ -85,7 +140,7 @@ func TestMemStoreSemantics(t *testing.T) {
 	}
 
 	// Put overwrites where PutIfAbsent refuses.
-	if err := ms.Put(ctx, "a", bytes.NewReader([]byte("3")), 1, "application/json"); err != nil {
+	if err := ms.Put(ctx, "a", []byte("3")); err != nil {
 		t.Fatalf("put: %v", err)
 	}
 	rc, _ = ms.Get(ctx, "a")
@@ -95,8 +150,8 @@ func TestMemStoreSemantics(t *testing.T) {
 		t.Errorf("value after Put = %q, want 3", b)
 	}
 
-	if _, err := ms.Get(ctx, "missing"); err == nil {
-		t.Error("Get of a missing key succeeded")
+	if _, err := ms.Get(ctx, "missing"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("Get of a missing key = %v, want ErrNotFound", err)
 	}
 
 	for _, k := range []string{"p/1", "p/2", "q/1"} {

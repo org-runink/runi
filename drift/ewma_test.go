@@ -27,15 +27,15 @@ func TestEWMAKnownAnswer(t *testing.T) {
 	}
 }
 
-func TestEWMAHalfLife(t *testing.T) {
+func TestNewEWMAHalfLife(t *testing.T) {
 	// samples = 1: alpha = 1 − 2^−1 = 0.5.
-	e, err := EWMAHalfLife(1)
+	e, err := NewEWMAHalfLife(1)
 	if err != nil || relErr(e.Alpha(), 0.5) > 1e-15 {
 		t.Fatalf("alpha %v err %v", e.Alpha(), err)
 	}
 	// The defining property: after `samples` samples the first value's
 	// weight (1−alpha)^samples is one half. Start at 1, feed zeros.
-	e, _ = EWMAHalfLife(10)
+	e, _ = NewEWMAHalfLife(10)
 	e.Add(1)
 	for range 10 {
 		e.Add(0)
@@ -49,7 +49,7 @@ func TestEWMAHalfLife(t *testing.T) {
 	if naive := 1 - math.Pow(2, -1/s); naive != 0 {
 		t.Fatalf("naive alpha %v: the test no longer exercises the cancellation", naive)
 	}
-	e, err = EWMAHalfLife(s)
+	e, err = NewEWMAHalfLife(s)
 	if err != nil || relErr(e.Alpha(), math.Ln2/s) > 1e-9 {
 		t.Fatalf("alpha %v err %v, want ln2/s", e.Alpha(), err)
 	}
@@ -65,8 +65,8 @@ func TestEWMARejects(t *testing.T) {
 		t.Errorf("alpha 1 is valid: %v", err)
 	}
 	for _, s := range []float64{0, -1, math.NaN(), math.Inf(1), math.Inf(-1)} {
-		if _, err := EWMAHalfLife(s); !errors.Is(err, ErrInvalid) {
-			t.Errorf("EWMAHalfLife(%v) err %v", s, err)
+		if _, err := NewEWMAHalfLife(s); !errors.Is(err, ErrInvalid) {
+			t.Errorf("NewEWMAHalfLife(%v) err %v", s, err)
 		}
 	}
 }

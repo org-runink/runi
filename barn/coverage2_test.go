@@ -99,7 +99,7 @@ func TestCorruptCheckpointFallsBackToTheLog(t *testing.T) {
 	wrecked := 0
 	for _, k := range keys {
 		if strings.Contains(k, "checkpoint") {
-			ms.Overwrite(k, []byte("{ not a checkpoint"))
+			ms.overwrite(k, []byte("{ not a checkpoint"))
 			wrecked++
 		}
 	}
@@ -191,12 +191,12 @@ func TestCommitGivesUpAfterMaxAttempts(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Put(ctx, Row{Key: "a", Payload: []byte("1")}); err == nil {
 		t.Fatal("put succeeded although every log write lost its race")
 	}
@@ -212,12 +212,12 @@ func TestCommitSurfacesAmbiguousWriteFailures(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			return errors.New("connection reset after send")
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Put(ctx, Row{Key: "a", Payload: []byte("1")}); err == nil {
 		t.Fatal("an ambiguous log failure was reported as success")
 	}

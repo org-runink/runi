@@ -46,11 +46,21 @@ import (
 
 // ── binary primitives ────────────────────────────────────────────────────────
 
-// Encoder writes Avro binary primitives to a buffer.
-type Encoder struct{ buf *bytes.Buffer }
+// ErrInvalid is wrapped by every error caused by a bad argument, such as a
+// codec WriteOCF does not implement. Match it with errors.Is; the message text
+// is not part of the API. A container that is corrupt or uses a codec this
+// package cannot read is a problem with the data, not an argument, and its
+// error does not wrap ErrInvalid.
+var ErrInvalid = errors.New("avro: invalid argument")
 
-// NewEncoder returns an Encoder backed by a fresh buffer.
-func NewEncoder() *Encoder { return &Encoder{buf: new(bytes.Buffer)} }
+// Encoder writes Avro binary primitives to a buffer.
+//
+// The zero value is an empty Encoder ready to use. Like bytes.Buffer, which it
+// holds, an Encoder must not be copied after first use.
+type Encoder struct{ buf bytes.Buffer }
+
+// NewEncoder returns an empty Encoder. It is the same as new(Encoder).
+func NewEncoder() *Encoder { return new(Encoder) }
 
 // Bytes returns the accumulated encoding.
 func (e *Encoder) Bytes() []byte { return e.buf.Bytes() }
@@ -88,7 +98,7 @@ func (e *Encoder) Bool(v bool) {
 	}
 }
 
-// Bytes writes a length-prefixed byte slice.
+// Blob writes a length-prefixed byte slice (Avro bytes).
 func (e *Encoder) Blob(b []byte) {
 	e.Long(int64(len(b)))
 	e.buf.Write(b)

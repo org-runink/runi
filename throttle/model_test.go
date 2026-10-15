@@ -118,9 +118,9 @@ func (r *refBucket) tokens(at time.Time) int {
 	return best
 }
 
-// refBudget counts per window in a map, the window found by a different
+// refQuota counts per window in a map, the window found by a different
 // floor than the package's.
-type refBudget struct {
+type refQuota struct {
 	limit  int
 	W      int64
 	origin time.Time
@@ -128,12 +128,12 @@ type refBudget struct {
 	used   map[int64]int
 }
 
-func (r *refBudget) window(now time.Time) int64 {
+func (r *refQuota) window(now time.Time) int64 {
 	e := int64(now.Sub(r.origin))
 	return (e - ((e%r.W)+r.W)%r.W) / r.W
 }
 
-func (r *refBudget) allow(at time.Time, n int) bool {
+func (r *refQuota) allow(at time.Time, n int) bool {
 	now := r.clk.at(at)
 	if n <= 0 {
 		return true
@@ -245,9 +245,9 @@ func mustBucket(t testing.TB, rate float64, burst int) Bucket {
 	return b
 }
 
-func mustBudget(t testing.TB, limit int, w time.Duration, origin time.Time) Budget {
+func mustQuota(t testing.TB, limit int, w time.Duration, origin time.Time) Quota {
 	t.Helper()
-	b, err := NewBudget(limit, w, origin)
+	b, err := NewQuota(limit, w, origin)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -328,14 +328,14 @@ func TestBucketModel(t *testing.T) {
 	}
 }
 
-func TestBudgetModel(t *testing.T) {
+func TestQuotaModel(t *testing.T) {
 	r := rand.New(rand.NewPCG(3, 4))
 	for trial := range 400 / raceScale {
 		limit := 1 + r.IntN(6)
 		w := time.Duration(1+r.IntN(8)) * 500 * time.Millisecond
 		origin := t0.Add(time.Duration(r.IntN(4001)-2000) * time.Millisecond)
-		b := mustBudget(t, limit, w, origin)
-		ref := refBudget{limit: limit, W: int64(w), origin: origin, used: map[int64]int{}}
+		b := mustQuota(t, limit, w, origin)
+		ref := refQuota{limit: limit, W: int64(w), origin: origin, used: map[int64]int{}}
 		for i, c := range randomCalls(r, 200) {
 			if c.op == 0 {
 				now := c.at

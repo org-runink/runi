@@ -284,7 +284,7 @@ func TestModels(t *testing.T) {
 		}
 
 		// NofM.
-		m := 1 + r.IntN(MaxM)
+		m := 1 + r.IntN(MaxSize)
 		if r.IntN(4) == 0 {
 			m = 1 + r.IntN(6)
 		}

@@ -4,10 +4,16 @@ package toon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"strings"
 )
+
+// ErrInvalid is wrapped by every error from a bad option: an Options field
+// outside the values its doc names, such as a Delimiter other than ',', '\t'
+// or '|'. Match it with errors.Is; the message text is not part of the API.
+var ErrInvalid = errors.New("toon: invalid option")
 
 // SyntaxError says what was wrong and on which line of the input, counting
 // from 1 and counting the fence if there was one, so the number matches what
@@ -31,14 +37,14 @@ func (e *SyntaxError) Error() string { return fmt.Sprintf("toon: line %d: %s", e
 // ",string" option, Go arrays), are filled through encoding/json instead.
 //
 // A declared array length that disagrees with the number of values is taken as
-// the model miscounting and the values win; use [Strict] to reject it.
+// the model miscounting and the values win; use [DecodeStrict] to reject it.
 func Decode(text string, v any) error { return decode(text, v, false) }
 
-// Strict is Decode, except a declared array length that does not match the
+// DecodeStrict is Decode, except a declared array length that does not match the
 // number of values is an error. Use it when the count is load-bearing — when
 // it came from a schema the model was told to fill rather than from the model
 // counting its own output.
-func Strict(text string, v any) error { return decode(text, v, true) }
+func DecodeStrict(text string, v any) error { return decode(text, v, true) }
 
 // marshalDoc re-marshals the parsed document so encoding/json can fill the
 // caller's typed destination. It is a variable for the same reason

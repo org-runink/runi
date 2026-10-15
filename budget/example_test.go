@@ -22,7 +22,7 @@ func Example() {
 	}
 	// A fake clock, so the example is about the arithmetic.
 	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	b, err := budget.New(plan, func() time.Time { return now })
+	b, err := budget.New(plan, budget.WithClock(func() time.Time { return now }))
 	if err != nil {
 		panic(err)
 	}

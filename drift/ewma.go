@@ -22,7 +22,7 @@ import "math"
 // Brown, Statistical Forecasting for Inventory Control, McGraw-Hill, 1959.
 //
 // The zero value is not usable (its alpha is 0); build one with NewEWMA or
-// EWMAHalfLife. Safe to copy, not safe for concurrent use. NaN and ±Inf are
+// NewEWMAHalfLife. Safe to copy, not safe for concurrent use. NaN and ±Inf are
 // skipped and counted in Skipped.
 type EWMA struct {
 	alpha   float64
@@ -41,10 +41,10 @@ func NewEWMA(alpha float64) (EWMA, error) {
 	return EWMA{alpha: alpha}, nil
 }
 
-// EWMAHalfLife returns an average in which a value's weight halves every
+// NewEWMAHalfLife returns an average in which a value's weight halves every
 // `samples` samples: alpha = 1 − 2^(−1/samples). samples must be finite and
 // positive; it need not be a whole number.
-func EWMAHalfLife(samples float64) (EWMA, error) {
+func NewEWMAHalfLife(samples float64) (EWMA, error) {
 	if !(samples > 0) || math.IsInf(samples, 1) {
 		return EWMA{}, invalid("samples", samples, "finite and > 0")
 	}

@@ -154,8 +154,8 @@ func TestFitSurfacesASingularDesign(t *testing.T) {
 
 func TestFitARMARejectsTooShortASeries(t *testing.T) {
 	// len(y) <= p+q+1 leaves nothing to fit on.
-	if _, err := fitARMA([]float64{1, 2, 3}, 2, 1); !errors.Is(err, errShort) {
-		t.Fatalf("fitARMA on too short a series err = %v; want errShort", err)
+	if _, err := fitARMA([]float64{1, 2, 3}, 2, 1); !errors.Is(err, ErrTooShort) {
+		t.Fatalf("fitARMA on too short a series err = %v; want ErrTooShort", err)
 	}
 }
 

@@ -39,22 +39,22 @@ func TestCorruptLogIsDetected(t *testing.T) {
 		corrupt func(ms *MemStore)
 	}{
 		{"version in the object disagrees with its name", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":7,"parent":1,"ts":1,"writer":"x","add":[],"remove":[],"op":"append"}`))
+			ms.overwrite(logKey(2), []byte(`{"version":7,"parent":1,"ts":1,"writer":"x","add":[],"remove":[],"op":"append"}`))
 		}},
 		{"parent does not follow the previous version", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":2,"parent":99,"ts":1,"writer":"x","add":[],"remove":[],"op":"append"}`))
+			ms.overwrite(logKey(2), []byte(`{"version":2,"parent":99,"ts":1,"writer":"x","add":[],"remove":[],"op":"append"}`))
 		}},
 		{"removes a file that is not live", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[],"remove":["data/never-existed.avro"],"op":"append"}`))
+			ms.overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[],"remove":["data/never-existed.avro"],"op":"append"}`))
 		}},
 		{"adds a file outside data/", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[{"path":"../escape.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1}],"remove":[],"op":"append"}`))
+			ms.overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[{"path":"../escape.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1}],"remove":[],"op":"append"}`))
 		}},
 		{"adds the same file twice", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[{"path":"data/dup.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1},{"path":"data/dup.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1}],"remove":[],"op":"append"}`))
+			ms.overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[{"path":"data/dup.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1},{"path":"data/dup.avro","rows":1,"minKey":"a","maxKey":"a","bytes":1}],"remove":[],"op":"append"}`))
 		}},
 		{"not JSON at all", func(ms *MemStore) {
-			ms.Overwrite(logKey(2), []byte(`{"version":`))
+			ms.overwrite(logKey(2), []byte(`{"version":`))
 		}},
 	}
 	for _, c := range cases {
@@ -162,12 +162,12 @@ func TestCompactGivesUpWhenEveryPlanLoses(t *testing.T) {
 		}
 	}
 	// Every commit the compaction attempts loses its race.
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	if _, err := tb.Compact(ctx); err == nil {
 		t.Error("compaction reported success although every plan lost its race")
 	}
@@ -188,12 +188,12 @@ func TestCompactHonoursContextWhileRetrying(t *testing.T) {
 			t.Fatalf("put: %v", err)
 		}
 	}
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
 			return ErrExists
 		}
 		return nil
-	}
+	})
 	dead, cancel := context.WithCancel(ctx)
 	cancel()
 	if _, err := tb.Compact(dead); err == nil {

@@ -97,7 +97,7 @@ func fitARMA(y []float64, p, q int) (*arma, error) {
 	// p + q coefficients fitted to exactly p + q points is interpolation, and
 	// it would report a residual variance of nothing with total confidence.
 	if len(y) <= p+q+2 {
-		return nil, errShort
+		return nil, ErrTooShort
 	}
 	if p == 0 && q == 0 {
 		e := make([]float64, len(y))

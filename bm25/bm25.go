@@ -125,6 +125,8 @@ type Result struct {
 
 // Index is a searchable corpus. Build it with [New]; it is read-only and safe
 // for concurrent use once built.
+//
+// The zero value is an empty index: Len reports 0 and Search returns nil.
 type Index struct {
 	opts Options
 
@@ -648,8 +650,11 @@ func (ix *Index) Search(query string, k int) []Result {
 	// and deliberately so: a document's contributions are still summed in the
 	// order the query listed its terms, which is what makes a score identical
 	// to the bit rather than merely close.
+	if len(ix.docIDs) == 0 {
+		return nil // an empty index, including the zero Index, matches nothing
+	}
 	terms := ix.terms(query)
-	if len(terms) == 0 || len(ix.docIDs) == 0 {
+	if len(terms) == 0 {
 		return nil
 	}
 

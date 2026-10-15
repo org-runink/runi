@@ -15,8 +15,8 @@ import (
 // dropped connection looks like: the object was found, the bytes were not.
 type brokenBody struct{ inner Store }
 
-func (b brokenBody) Put(ctx context.Context, k string, r io.Reader, n int64, ct string) error {
-	return b.inner.Put(ctx, k, r, n, ct)
+func (b brokenBody) Put(ctx context.Context, k string, d []byte) error {
+	return b.inner.Put(ctx, k, d)
 }
 func (b brokenBody) PutIfAbsent(ctx context.Context, k string, d []byte) error {
 	return b.inner.PutIfAbsent(ctx, k, d)
@@ -82,7 +82,7 @@ func TestVacuumStopsOnAContradictoryLog(t *testing.T) {
 		t.Fatalf("put: %v", err)
 	}
 	// v3 removes a file that was never added.
-	ms.Overwrite(logKey(3), []byte(`{"version":3,"parent":2,"ts":1,"writer":"x","add":[],"remove":["data/phantom.avro"],"op":"append"}`))
+	ms.overwrite(logKey(3), []byte(`{"version":3,"parent":2,"ts":1,"writer":"x","add":[],"remove":["data/phantom.avro"],"op":"append"}`))
 	ck.advance(48 * time.Hour)
 
 	tb2, err := Open(ms, "acme", "orders", WithClock(ck.now))
@@ -198,7 +198,7 @@ func TestVacuumValidatesHistoryThatReadsSkip(t *testing.T) {
 	}
 	// v2 now claims to remove a file that never existed. Readers start from
 	// the latest checkpoint and never replay it.
-	ms.Overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[],"remove":["data/phantom.avro"],"op":"append"}`))
+	ms.overwrite(logKey(2), []byte(`{"version":2,"parent":1,"ts":1,"writer":"x","add":[],"remove":["data/phantom.avro"],"op":"append"}`))
 
 	tb2, err := Open(ms, "acme", "orders", WithClock(ck.now))
 	if err != nil {
@@ -237,23 +237,23 @@ func TestCompactStopsIfCancelledWhileWaitingToReplan(t *testing.T) {
 
 	cancelCtx, cancel := context.WithCancel(ctx)
 	var fired bool
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if fired || !contains(key, "_log/") {
 			return nil
 		}
 		fired = true
 		// A concurrent compaction takes the files this plan meant to remove,
 		// so this plan conflicts...
-		saved := ms.FailPutIfAbsent
-		ms.FailPutIfAbsent = nil
+		saved := ms.failHook()
+		ms.setFailPutIfAbsent(nil)
 		_, _ = other.Compact(ctx)
-		ms.FailPutIfAbsent = saved
+		ms.setFailPutIfAbsent(saved)
 		// ...and the caller gives up before the next plan starts.
 		cancel()
 		return nil
-	}
+	})
 	_, err = tb.Compact(cancelCtx)
-	ms.FailPutIfAbsent = nil
+	ms.setFailPutIfAbsent(nil)
 	if err == nil {
 		t.Skip("the compaction won its race before the cancellation landed")
 	}

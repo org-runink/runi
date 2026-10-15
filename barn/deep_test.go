@@ -164,18 +164,18 @@ func TestCompactGivesUpAfterRepeatedConflicts(t *testing.T) {
 	}
 	// Every time tb tries to commit a plan, another writer compacts first, so
 	// tb's chosen files are already gone.
-	ms.FailPutIfAbsent = func(key string) error {
+	ms.setFailPutIfAbsent(func(key string) error {
 		if strings.Contains(key, "_log/") {
-			saved := ms.FailPutIfAbsent
-			ms.FailPutIfAbsent = nil
+			saved := ms.failHook()
+			ms.setFailPutIfAbsent(nil)
 			_, _ = other.Compact(ctx)
 			_, _ = other.Put(ctx, Row{Key: "filler", Payload: []byte("x")})
-			ms.FailPutIfAbsent = saved
+			ms.setFailPutIfAbsent(saved)
 		}
 		return nil
-	}
+	})
 	_, err = tb.Compact(ctx)
-	ms.FailPutIfAbsent = nil
+	ms.setFailPutIfAbsent(nil)
 	// Either it gave up, or it eventually won; both are acceptable outcomes.
 	// What is not acceptable is a wrong table afterwards.
 	rows, serr := tb.Scan(ctx, "")

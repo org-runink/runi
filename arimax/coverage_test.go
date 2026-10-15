@@ -43,8 +43,8 @@ func TestFitARMAStageTooShort(t *testing.T) {
 		y[i] = math.Sin(float64(i)) + float64(i)
 	}
 	_, err := Fit(y, nil, 0, Order{P: 5, D: 3, Q: 5})
-	if !errors.Is(err, errShort) {
-		t.Fatalf("err = %v, want errShort", err)
+	if !errors.Is(err, ErrTooShort) {
+		t.Fatalf("err = %v, want ErrTooShort", err)
 	}
 }
 
@@ -95,8 +95,8 @@ func TestOLSQRUnderflowingColumn(t *testing.T) {
 // differences away the whole series.
 func TestFitSeriesTooShortForDifferencing(t *testing.T) {
 	y := []float64{1, 2, 3, 4}
-	if _, err := Fit(y, nil, 0, Order{D: 5}); !errors.Is(err, errShort) {
-		t.Fatalf("err = %v, want errShort", err)
+	if _, err := Fit(y, nil, 0, Order{D: 5}); !errors.Is(err, ErrTooShort) {
+		t.Fatalf("err = %v, want ErrTooShort", err)
 	}
 }
 
@@ -129,8 +129,8 @@ func TestGLSStepRefusesAnOverDeterminedWhitenedDesign(t *testing.T) {
 			design[i*cols+1+j] = x[i*k+j]
 		}
 	}
-	if _, err := glsStep(y, design, n, cols, 0, 0, []float64{0.5}, []float64{0.2}); !errors.Is(err, errShort) {
-		t.Fatalf("glsStep err = %v, want errShort", err)
+	if _, err := glsStep(y, design, n, cols, 0, 0, []float64{0.5}, []float64{0.2}); !errors.Is(err, ErrTooShort) {
+		t.Fatalf("glsStep err = %v, want ErrTooShort", err)
 	}
 
 	// And Fit still returns the staged fit, to the digit.

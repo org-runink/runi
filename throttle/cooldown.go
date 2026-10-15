@@ -39,8 +39,9 @@ import "time"
 // latest (and counted in Late), so a clock stepped back cannot end a period
 // early.
 //
-// Build one with NewCooldown. Not safe to copy (copies share the table) and
-// not safe for concurrent use.
+// The zero value is not usable (Allow panics on it: it has no table); build
+// one with NewCooldown, which returns a pointer. Not safe to copy (copies
+// share the table) and not safe for concurrent use.
 type Cooldown[K comparable] struct {
 	period  time.Duration
 	maxKeys int

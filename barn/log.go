@@ -229,10 +229,23 @@ func (t *Table) loadState(ctx context.Context, target int64) (*state, error) {
 	}
 	t.mu.Unlock()
 
-	if cp := t.bestCheckpoint(ctx, target, atHead); cp > base.version {
-		if s, err := t.readCheckpoint(ctx, cp); err == nil {
+	cp, err := t.bestCheckpoint(ctx, target, atHead)
+	if err != nil {
+		return nil, err
+	}
+	if cp > base.version {
+		s, err := t.readCheckpoint(ctx, cp)
+		switch {
+		case err == nil:
 			base = s
-		} // an unreadable checkpoint is skipped: replay from the older base is still correct
+		case errors.Is(err, ErrNotFound), errors.Is(err, ErrCorrupt):
+			// A checkpoint that is missing or does not decode is skipped:
+			// replay from the older base is still correct.
+		default:
+			// The store failed. Falling back would hide that and quietly turn
+			// every read into a replay of the whole log.
+			return nil, fmt.Errorf("barn: read checkpoint v%d: %w", cp, err)
+		}
 	}
 
 	s := base
@@ -296,19 +309,26 @@ func (t *Table) lostSpeculation() {
 }
 
 // bestCheckpoint picks the checkpoint to start from, 0 for none. At the head it
-// trusts the _last hint if it is readable and ≤ target; otherwise (and for time
-// travel) it lists _checkpoint/.
-func (t *Table) bestCheckpoint(ctx context.Context, target int64, atHead bool) int64 {
+// trusts the _last hint if it is present, parses, and is ≤ target; otherwise
+// (and for time travel) it lists _checkpoint/.
+//
+// The hint is advisory, so a hint that does not exist (ErrNotFound) or does
+// not parse only means falling back to the listing. A store that fails to
+// answer is different: it is returned, because treating it as "no
+// checkpoint" would silently replay the whole log on every read.
+func (t *Table) bestCheckpoint(ctx context.Context, target int64, atHead bool) (int64, error) {
 	if atHead {
-		if body, err := t.readObject(ctx, t.lastKey()); err == nil {
-			if v, err := strconv.ParseInt(strings.TrimSpace(string(body)), 10, 64); err == nil && v > 0 && v <= target {
-				return v
-			}
+		v, ok, err := t.readHint(ctx)
+		if err != nil {
+			return 0, err
+		}
+		if ok && v > 0 && v <= target {
+			return v, nil
 		}
 	}
 	cps, err := t.listVersions(ctx, "_checkpoint/", ".avro")
 	if err != nil {
-		return 0
+		return 0, err
 	}
 	var best int64
 	for _, v := range cps {
@@ -316,7 +336,21 @@ func (t *Table) bestCheckpoint(ctx context.Context, target int64, atHead bool) i
 			best = v
 		}
 	}
-	return best
+	return best, nil
+}
+
+// readHint reads the _checkpoint/_last hint. ok is false when there is no
+// hint or it does not parse; err is non-nil only when the store failed.
+func (t *Table) readHint(ctx context.Context) (v int64, ok bool, err error) {
+	body, err := t.readObject(ctx, t.lastKey())
+	if errors.Is(err, ErrNotFound) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("barn: read checkpoint hint: %w", err)
+	}
+	v, err = strconv.ParseInt(strings.TrimSpace(string(body)), 10, 64)
+	return v, err == nil, nil
 }
 
 const checkpointSchema = `{"type":"record","name":"CheckpointFile","namespace":"org.runink.store.barn","fields":[` +
@@ -389,14 +423,17 @@ func (t *Table) writeCheckpoint(ctx context.Context, s *state) error {
 		return err
 	}
 	// The hint is advisory: only move it forward. A racing writer can still
-	// move it back; readers then replay a little more.
-	if body, err := t.readObject(ctx, t.lastKey()); err == nil {
-		if cur, err := strconv.ParseInt(strings.TrimSpace(string(body)), 10, 64); err == nil && cur >= s.version {
-			return nil
-		}
+	// move it back; readers then replay a little more. A missing or garbled
+	// hint is replaced; a store that cannot say what the hint is fails the
+	// checkpoint write rather than overwrite a hint it could not read.
+	cur, ok, err := t.readHint(ctx)
+	if err != nil {
+		return err
 	}
-	hint := []byte(strconv.FormatInt(s.version, 10))
-	return t.st.Put(ctx, t.lastKey(), bytes.NewReader(hint), int64(len(hint)), "text/plain")
+	if ok && cur >= s.version {
+		return nil
+	}
+	return t.st.Put(ctx, t.lastKey(), []byte(strconv.FormatInt(s.version, 10)))
 }
 
 type action struct {

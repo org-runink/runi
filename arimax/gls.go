@@ -69,7 +69,7 @@ func glsStep(y, design []float64, n, cols, skip, d int, phi, theta []float64) ([
 		// that OLS could solve in levels can be over-determined once filtered.
 		// Refusing leaves the staged estimate in place, which is a worse
 		// estimate but a real one.
-		return nil, errShort
+		return nil, ErrTooShort
 	}
 	fd := make([]float64, rows*w)
 	col := make([]float64, n)

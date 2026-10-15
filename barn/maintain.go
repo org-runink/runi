@@ -29,8 +29,8 @@ type CompactResult struct {
 // compaction that commits after a concurrent append never beats that append.
 //
 // On a conflict (a concurrent compaction already removed one of these files)
-// the output is deleted and Compact re-plans from the new head, up to
-// MaxAttempts times.
+// the output is deleted and Compact re-plans from the new head, up to the
+// limit set by WithMaxAttempts.
 func (t *Table) Compact(ctx context.Context) (CompactResult, error) {
 	var lastErr error
 	for plan := 0; plan < t.cfg.maxAttempts; plan++ {

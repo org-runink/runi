@@ -53,7 +53,7 @@ func plan() Plan {
 
 func mustNew(t *testing.T, p Plan, c *fakeClock) *Budget {
 	t.Helper()
-	b, err := New(p, c.now)
+	b, err := New(p, WithClock(c.now))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -159,7 +159,7 @@ func TestBeginSkipsAZeroSliceEvenWithNoMinimum(t *testing.T) {
 }
 
 func TestPhaseContextNeverOutlivesItsSliceOrItsParent(t *testing.T) {
-	b, err := New(plan(), nil)
+	b, err := New(plan())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -310,11 +310,11 @@ func TestValidate(t *testing.T) {
 		p := plan()
 		mutate(&p)
 		err := p.Validate()
-		if err == nil || !strings.Contains(err.Error(), want) {
+		if err == nil || !strings.Contains(err.Error(), want) || !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: err = %v", want, err)
 		}
-		if _, err := New(p, nil); err == nil {
-			t.Errorf("%s: New accepted the plan", want)
+		if _, err := New(p); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: New err = %v, want ErrInvalid", want, err)
 		}
 	}
 	if err := plan().Validate(); err != nil {
@@ -351,7 +351,7 @@ func TestCriticalPath(t *testing.T) {
 }
 
 func TestConcurrentUse(t *testing.T) {
-	b, err := New(Plan{Total: time.Minute, Phases: []Phase{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}}, nil)
+	b, err := New(Plan{Total: time.Minute, Phases: []Phase{{Name: "a"}, {Name: "b"}, {Name: "c"}, {Name: "d"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -412,5 +412,16 @@ func TestScaledClampsMarginAndMinSlice(t *testing.T) {
 	}
 	if err := scaled.Validate(); err != nil {
 		t.Errorf("scaling a valid plan made it invalid: %v", err)
+	}
+}
+
+func TestWithNilClockMeansTimeNow(t *testing.T) {
+	before := time.Now()
+	b, err := New(plan(), WithClock(nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d := b.Deadline(); d.Before(before.Add(plan().Total)) || d.After(time.Now().Add(plan().Total)) {
+		t.Fatalf("deadline %v is not time.Now plus the total", d)
 	}
 }

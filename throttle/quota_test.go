@@ -6,21 +6,21 @@ import (
 	"time"
 )
 
-func TestNewBudgetInvalid(t *testing.T) {
+func TestNewQuotaInvalid(t *testing.T) {
 	for _, c := range []struct {
 		limit int
 		w     time.Duration
 	}{{0, time.Second}, {-1, time.Second}, {1, 0}, {1, -time.Second}} {
-		if _, err := NewBudget(c.limit, c.w, t0); !errors.Is(err, ErrInvalid) {
-			t.Errorf("NewBudget(%d, %v) error = %v, want ErrInvalid", c.limit, c.w, err)
+		if _, err := NewQuota(c.limit, c.w, t0); !errors.Is(err, ErrInvalid) {
+			t.Errorf("NewQuota(%d, %v) error = %v, want ErrInvalid", c.limit, c.w, err)
 		}
 	}
 }
 
 // Two per minute, windows starting on the half minute. t0 lies in the window
 // [−30 s, 30 s), before the origin.
-func TestBudgetScript(t *testing.T) {
-	b := mustBudget(t, 2, time.Minute, ts(30))
+func TestQuotaScript(t *testing.T) {
+	b := mustQuota(t, 2, time.Minute, ts(30))
 	if b.Limit() != 2 || b.Window() != time.Minute {
 		t.Fatal("parameters")
 	}
@@ -46,7 +46,7 @@ func TestBudgetScript(t *testing.T) {
 		t.Fatal("third window")
 	}
 	// Far before the origin: windows exist there too, aligned the same way.
-	c := mustBudget(t, 1, time.Minute, ts(30))
+	c := mustQuota(t, 1, time.Minute, ts(30))
 	if !c.WindowEnd(ts(-3600)).Equal(ts(-3570)) || !c.Allow(ts(-3600)) || c.Allow(ts(-3571)) || !c.Allow(ts(-3570)) {
 		t.Fatal("windows before the origin")
 	}
@@ -64,8 +64,8 @@ func TestBudgetScript(t *testing.T) {
 
 // A clock stepped back cannot reopen an earlier window: the late call is
 // taken at the latest time, in the latest window.
-func TestBudgetLate(t *testing.T) {
-	b := mustBudget(t, 1, time.Minute, t0)
+func TestQuotaLate(t *testing.T) {
+	b := mustQuota(t, 1, time.Minute, t0)
 	if !b.Allow(ts(59)) || !b.Allow(ts(60)) {
 		t.Fatal("one per window")
 	}

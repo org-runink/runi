@@ -10,6 +10,16 @@ import (
 	"time"
 )
 
+// ErrInvalid is wrapped by every error Validate and New return: a plan with a
+// non-positive total, a negative duration, a missing or repeated phase name,
+// or floors and margin that exceed the deadline. Match it with errors.Is; the
+// message text is not part of the API.
+var ErrInvalid = errors.New("budget: invalid plan")
+
+func invalid(format string, args ...any) error {
+	return fmt.Errorf("%w: "+format, append([]any{ErrInvalid}, args...)...)
+}
+
 // Phase is one row of a Plan.
 type Phase struct {
 	// Name identifies the phase in Begin, End and the record. Unique, non-empty.
@@ -41,28 +51,28 @@ type Plan struct {
 // together exceed the deadline.
 func (p Plan) Validate() error {
 	if p.Total <= 0 {
-		return fmt.Errorf("budget: total %v is not positive", p.Total)
+		return invalid("total %v is not positive", p.Total)
 	}
 	if p.Margin < 0 || p.MinSlice < 0 {
-		return errors.New("budget: margin and minimum slice must not be negative")
+		return invalid("margin and minimum slice must not be negative")
 	}
 	reserved := p.Margin
 	seen := make(map[string]bool, len(p.Phases))
 	for _, ph := range p.Phases {
 		if ph.Name == "" {
-			return errors.New("budget: a phase has no name")
+			return invalid("a phase has no name")
 		}
 		if seen[ph.Name] {
-			return fmt.Errorf("budget: phase %q appears twice", ph.Name)
+			return invalid("phase %q appears twice", ph.Name)
 		}
 		seen[ph.Name] = true
 		if ph.Cap < 0 || ph.Floor < 0 {
-			return fmt.Errorf("budget: phase %q has a negative cap or floor", ph.Name)
+			return invalid("phase %q has a negative cap or floor", ph.Name)
 		}
 		reserved += ph.Floor
 	}
 	if reserved > p.Total {
-		return fmt.Errorf("budget: margin and floors need %v, more than the %v total", reserved, p.Total)
+		return invalid("margin and floors need %v, more than the %v total", reserved, p.Total)
 	}
 	return nil
 }
@@ -154,6 +164,8 @@ type Record struct {
 
 // Budget is one deadline and the ledger of how its phases spent it. It is
 // safe for concurrent use.
+//
+// The zero value is not usable: create a Budget with New.
 type Budget struct {
 	plan     Plan
 	byName   map[string]Phase
@@ -167,11 +179,29 @@ type Budget struct {
 	final bool
 }
 
-// New starts the deadline now. A nil clock means time.Now.
-func New(plan Plan, now func() time.Time) (*Budget, error) {
+// Option configures a Budget.
+type Option func(*config)
+
+type config struct {
+	now func() time.Time
+}
+
+// WithClock sets the clock the ledger reads (default time.Now), so the
+// arithmetic can be tested with a fake clock. A nil clock means time.Now.
+// Context deadlines are set from durations and still expire on the real clock.
+func WithClock(now func() time.Time) Option { return func(c *config) { c.now = now } }
+
+// New starts the deadline now. A plan that fails Validate is refused with
+// that error, which wraps ErrInvalid.
+func New(plan Plan, opts ...Option) (*Budget, error) {
 	if err := plan.Validate(); err != nil {
 		return nil, err
 	}
+	var cfg config
+	for _, o := range opts {
+		o(&cfg)
+	}
+	now := cfg.now
 	if now == nil {
 		now = time.Now
 	}

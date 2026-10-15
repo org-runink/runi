@@ -20,14 +20,14 @@ func Example() {
 	if err != nil {
 		panic(err)
 	}
-	all, err := throttle.NewBudget(3, time.Minute, start)
+	all, err := throttle.NewQuota(3, time.Minute, start)
 	if err != nil {
 		panic(err)
 	}
 	held := 0
 	for s := 0; s < 80; s += 2 {
 		at := start.Add(time.Duration(s) * time.Second)
-		// Ask the per-minute budget first without spending it, so a refusal
+		// Ask the per-minute quota first without spending it, so a refusal
 		// there does not use up the service's cooldown.
 		if all.Remaining(at) == 0 {
 			held++
@@ -37,14 +37,14 @@ func Example() {
 			fmt.Printf("t=%2ds restart db\n", s)
 		}
 	}
-	fmt.Println("refused by cooldown:", each.Denied(), "held by budget:", held)
+	fmt.Println("refused by cooldown:", each.Denied(), "held by quota:", held)
 	// Output:
 	// t= 0s restart db
 	// t=10s restart db
 	// t=20s restart db
 	// t=60s restart db
 	// t=70s restart db
-	// refused by cooldown: 16 held by budget: 19
+	// refused by cooldown: 16 held by quota: 19
 }
 
 // One action every 2 s on average, up to 3 at once. Five requests at once
@@ -70,8 +70,8 @@ func ExampleBucket() {
 }
 
 // At most 2 scale-ups per hour, on the hour.
-func ExampleBudget() {
-	b, err := throttle.NewBudget(2, time.Hour, start)
+func ExampleQuota() {
+	b, err := throttle.NewQuota(2, time.Hour, start)
 	if err != nil {
 		panic(err)
 	}

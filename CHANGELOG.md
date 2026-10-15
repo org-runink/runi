@@ -8,16 +8,83 @@ in the README, under [Compatibility](README.md#compatibility).
 Releases before the first entry here are listed only as tags; their commit
 messages are the record.
 
-## v1.0.0 — 2026-10-14
+## v1.0.0 — 2026-10-15
 
 The first stable release. From here on, within v1, the exported API of every
 package stays, what `barn`, `toon` and `avro` wrote stays readable, and the
 module keeps zero dependencies. The promise and what it does not cover are
 in the README, under [Compatibility](README.md#compatibility).
 
-This release carries everything since v0.8.0. Five packages are new: `drift`,
-`rate`, `tree`, `sustain` and `throttle`. One change breaks callers: `tablelog`
-is now `barn`.
+Before the freeze, every exported name in the module was audited for anything
+that would be expensive to keep forever. What changed as a result is below;
+everything else is v0.9.2 unchanged.
+
+### Breaking
+
+- **`barn.Store`: `Put` takes the data, and `Get` reports a missing key.**
+  `Put(ctx, key, r io.Reader, size int64, contentType string)` is now
+  `Put(ctx, key string, data []byte)`, the same shape as `PutIfAbsent`, and
+  `Get` must return an error wrapping the new `barn.ErrNotFound` for a key
+  that does not exist. A Store implementation changes those two methods; the
+  `Store` doc now states every method's full contract. barn uses the
+  distinction: a missing checkpoint hint still falls back to the log, but
+  any other error while reading checkpoints is now returned instead of
+  silently replaying the whole log. `MemStore`'s test hooks
+  (`FailPutIfAbsent`, `Overwrite`, `Len`) are no longer exported, and a zero
+  `MemStore{}` is ready to use.
+- **`budget.New(plan, now)` is `budget.New(plan, opts ...Option)`.** Pass a
+  clock with `budget.WithClock(now)`; `New(plan, nil)` becomes `New(plan)`.
+- **`toon.Strict` is `toon.DecodeStrict`**, matching `salvage.DecodeStrict`.
+- **`rate.NewWindow` returns `*Window`.** A `Window` shares its buffer with any
+  copy, so it is handed out as a pointer, as `throttle.NewCooldown` is.
+- **`sustain.NofM`: `N()` and `M()` are `Need()` and `Size()`**, and `MaxM` is
+  `MaxSize`, so `N()` means a sample count everywhere in the module.
+- **`drift.EWMAHalfLife` is `drift.NewEWMAHalfLife`**, like every other
+  constructor.
+- **`throttle.Budget` and `NewBudget` are `Quota` and `NewQuota`**, so they
+  are not confused with the `budget` package.
+- **`memo.Hash` keys change for unsigned integers and for unlisted types.**
+  Unsigned integers are now type-tagged like every other part; untagged,
+  `Hash(uint64(0x7a7a7a7a7a7a7a7a))` equalled eight `nil` parts. Types `Hash`
+  does not list (structs, pointers, named types) are now hashed by their
+  contents instead of their `%T|%v` text, so a pointer, or a struct holding
+  one, no longer hashes by address and can hit the cache. Keys of every other
+  listed type are unchanged, and are now promised stable for all of v1.
+
+### Added
+
+- **`ErrInvalid` in every package that rejects arguments.** arimax, avro,
+  budget, season, stats and toon join drift, rate, sustain, throttle and
+  tree: every bad-argument error matches it with `errors.Is`. arimax also
+  exports `ErrTooShort`, `ErrNoFutureX` and `ErrNotFitted`.
+- **`stats.NewStandardiser` and `stats.NewMinMaxScaler`** rebuild a fitted
+  scaler from stored fields. The docs said a decoded scaler could be reused;
+  it could not, because fittedness is not visible in the fields (a min-max
+  fit of an all-zero column is the zero value).
+- **`tree.Metric.String`.**
+
+### Changed
+
+- **Zero values.** `avro.Encoder{}` and `barn.MemStore{}` are ready to use,
+  and `bm25.Index{}` is an empty index whose `Search` returns nil. The types
+  whose zero value is not usable now say so.
+- **`arimax.Model.Forecast` on a model not built by `Fit`** returns
+  `ErrNotFitted` instead of zeros.
+- **`avro.WriteOCF` allocates once per call instead of four times.**
+
+### Documentation
+
+- The `stats` package doc shows on pkg.go.dev again (a blank line had
+  detached it), and its example compiles.
+- Docs no longer name unexported helpers or settings that do not exist, and
+  `memo.Hash` lists exactly which types it supports and what it promises.
+
+## v0.9.2 — 2026-10-14
+
+Tagged from the release notes first written for v1.0.0, before the API freeze
+above. It carries everything since v0.8.0: five new packages (`drift`, `rate`,
+`tree`, `sustain` and `throttle`), and one change that breaks callers:
+`tablelog` is now `barn`.
 
 ### Breaking
 

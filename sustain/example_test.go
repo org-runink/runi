@@ -94,12 +94,14 @@ func ExampleNofM() {
 	if err != nil {
 		panic(err)
 	}
+	fmt.Printf("escalate on %d of the last %d\n", w.Need(), w.Size())
 	for i, ms := range []float64{120, 260, 140, 300, math.NaN(), 180, 255, 130, 110, 100} {
 		at := start.Add(time.Duration(i) * time.Second)
 		on := w.Update(ms, at)
 		fmt.Printf("%4.0f  %d/%d  escalated=%v\n", ms, w.Count(), w.Len(), on)
 	}
 	// Output:
+	// escalate on 3 of the last 5
 	//  120  0/1  escalated=false
 	//  260  1/2  escalated=false
 	//  140  1/3  escalated=false

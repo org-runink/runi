@@ -27,8 +27,9 @@
 // write the data file, then PutIfAbsent(_log/<head+1>). Losing that race yields
 // ErrExists; the writer re-reads the head and conflict-checks. Appends never
 // conflict. A compaction conflicts when a file it removes is no longer live; it
-// then re-plans from the new head. Retries use jittered exponential backoff up
-// to MaxAttempts. Versions are therefore dense: 1, 2, 3, … with no gaps.
+// then re-plans from the new head. Retries use jittered exponential backoff, up
+// to the limit set by WithMaxAttempts (32 by default). Versions are therefore
+// dense: 1, 2, 3, … with no gaps.
 //
 // # Read
 //
@@ -53,7 +54,7 @@
 //
 // No joins, no multi-table transactions, no secondary indexes, no uniqueness
 // beyond the key, no SQL. Workloads that need those stay on Litestream-replicated
-// SQLite. See the package section of the store README.
+// SQLite.
 package barn
 
 import (
@@ -73,16 +74,56 @@ import (
 // Store is the object-store surface barn needs. Implement it over S3,
 // GCS, MinIO, a filesystem, or anything else with an atomic create; it is an
 // interface so tests can inject faults too (a crash between the data write and
-// the log write, say).
+// the log write, say). [MemStore] is a complete in-memory implementation.
 //
-// PutIfAbsent must be an atomic create that reports a lost race as an error
-// wrapping ErrExists. Everything the table correctness rests on is
-// that one primitive.
+// Keys are slash-separated paths of the form tables/<tenant>/<table>/<path>.
+// A Store treats them as opaque strings: it must not clean, case-fold or
+// otherwise rewrite them, and a key read back from List must be accepted
+// unchanged by Get and Delete.
+//
+// Two errors are part of the contract. PutIfAbsent reports a key that already
+// exists with an error wrapping [ErrExists], and Get reports a key that does
+// not exist with an error wrapping [ErrNotFound]. barn tells these cases apart
+// with errors.Is, so any other error, from either method, is treated as a
+// failure and returned to the caller rather than read as "taken" or "absent".
+//
+// Every method must honour ctx, and all of them must be safe for concurrent
+// use: a table reads its data files in parallel, and any number of Tables, in
+// this process or others, may share one Store.
 type Store interface {
-	Put(ctx context.Context, key string, r io.Reader, size int64, contentType string) error
+	// Put stores data under key, creating it or replacing whatever was there.
+	// barn uses it only for the advisory _checkpoint/_last hint, so it need
+	// not be atomic with respect to other writers; it must not modify data,
+	// and must not retain it after returning.
+	Put(ctx context.Context, key string, data []byte) error
+
+	// PutIfAbsent stores data under key only if key does not exist, and
+	// otherwise returns an error wrapping ErrExists and leaves the existing
+	// object untouched. It must be an atomic create: when several callers race
+	// for the same key, exactly one succeeds and every other one gets
+	// ErrExists. Everything the table's correctness rests on is that one
+	// primitive. Like Put, it must not modify or retain data.
 	PutIfAbsent(ctx context.Context, key string, data []byte) error
+
+	// Get returns a reader over the whole object stored under key, which the
+	// caller closes. If key does not exist it returns an error wrapping
+	// ErrNotFound. An object whose PutIfAbsent or Put has returned must be
+	// readable by a later Get.
 	Get(ctx context.Context, key string) (io.ReadCloser, error)
+
+	// List returns the full key of every object whose key begins with prefix,
+	// in any order. The match is a plain string prefix, not a directory
+	// listing: keys in nested "directories" below prefix are included, and an
+	// empty prefix matches every key. The result must be complete, so an
+	// implementation over a paginated API follows every page, and it must
+	// include every object whose PutIfAbsent or Put has returned, because a
+	// LIST of the log is how a table finds its head. No matching keys is an
+	// empty result, not an error.
 	List(ctx context.Context, prefix string) ([]string, error)
+
+	// Delete removes the object stored under key. Deleting a key that does not
+	// exist is not an error: two Vacuums may race over the same files, and
+	// both must succeed.
 	Delete(ctx context.Context, key string) error
 }
 
@@ -94,6 +135,13 @@ var (
 	// corrupt the table rather than retry, so implementations should wrap this
 	// error rather than inventing their own.
 	ErrExists = errors.New("barn: object already exists")
+
+	// ErrNotFound is what a Store's Get must return (or wrap) when the key does
+	// not exist. barn relies on it to tell an object that is simply absent,
+	// such as a checkpoint hint that has not been written yet, from a read that
+	// failed; a Store that reports absence any other way turns those reads
+	// into errors.
+	ErrNotFound = errors.New("barn: object not found")
 
 	// ErrConflict: a compaction's removed file was already removed by a
 	// concurrent commit. Compact handles it by re-planning; it only surfaces
@@ -168,6 +216,7 @@ func WithClock(now func() time.Time) Option { return func(c *config) { c.now = n
 
 // Table is a handle on one tenant's table. It is safe for concurrent use, and
 // any number of Tables — in this process or others — may write the same table.
+// The zero value is not usable; use Open.
 type Table struct {
 	st     Store
 	tenant string
@@ -310,7 +359,8 @@ func (t *Table) LastCheckpointError() error {
 	return t.cpErr
 }
 
-// Snapshot is an immutable view of the table at one version.
+// Snapshot is an immutable view of the table at one version. The zero value is
+// not usable; get one from Table.Latest or Table.Snapshot.
 type Snapshot struct {
 	t *Table
 	s *state
