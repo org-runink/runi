@@ -1,0 +1,137 @@
+# Runi documentation website (Hugo + the Hextra theme).
+#
+#   hugo --source website --minify --destination ~/.cache/runi-docs-build
+#
+# The theme is a Hugo module pinned to an exact release in go.mod/go.sum AND vendored
+# into _vendor/ (`hugo mod vendor`), so a build needs no network and no Go toolchain.
+# FlexSearch, which Hextra would otherwise fetch from a CDN at build time, is vendored
+# under assets/lib/ for the same reason.
+#
+# Must build with Hugo 0.147.3 -- the version core-docs-publish.yml pins -- and newer.
+# That workflow clones this repo, looks for website/hugo.toml, and skips the product
+# entirely if it is absent, which is why this file existing is the whole gate.
+
+baseURL = "https://docs.runink.org/runi/"
+title = "Runi"
+defaultContentLanguage = "en"
+enableRobotsTXT = true
+# No blog, tags or feeds: only the docs tree and the home page.
+disableKinds = ["taxonomy", "term", "rss"]
+# No enableGitInfo: the CI checkout is shallow, and a wrong "last updated" date is
+# worse than none.
+
+# Consent-gated (Consent Mode v2, denied by default). Same GA4 property as runink.org
+# and the other docs sites -- one property across every public Runink surface, owner
+# decision 2026-09-28.
+[services]
+  [services.googleAnalytics]
+    id = 'G-SEECKDWZNJ'
+
+[module]
+  [module.hugoVersion]
+    extended = false
+    min = "0.147.3"
+
+  [[module.imports]]
+    path = "github.com/imfing/hextra"
+
+  # Hugo drops its default mounts once any mount is declared, so they are listed again.
+  [[module.mounts]]
+    source = "content"
+    target = "content"
+  [[module.mounts]]
+    source = "static"
+    target = "static"
+  [[module.mounts]]
+    source = "layouts"
+    target = "layouts"
+  [[module.mounts]]
+    source = "assets"
+    target = "assets"
+  [[module.mounts]]
+    source = "i18n"
+    target = "i18n"
+  [[module.mounts]]
+    source = "data"
+    target = "data"
+  # The logo, served from the repo's own assets/ so the site never holds a second copy.
+  # One mount per file: a directory mount would publish the wallpaper and the asset
+  # README too, and the file filter changed name between Hugo 0.147 and 0.153+.
+  [[module.mounts]]
+    source = "../assets/runi-logo.jpg"
+    target = "static/brand/runi-logo.jpg"
+
+[outputs]
+  home = ["html"]
+  page = ["html"]
+  section = ["html"]
+
+[markup]
+  [markup.highlight]
+    noClasses = false
+  [markup.goldmark.renderer]
+    unsafe = true
+  [markup.tableOfContents]
+    startLevel = 2
+    endLevel = 3
+
+[params]
+  description = "Seventeen small Go packages for data and AI work, with zero dependencies."
+  [params.navbar.logo]
+    path = "brand/runi-logo.jpg"
+    width = 28
+    height = 28
+  [params.footer]
+    displayCopyright = true
+    displayPoweredBy = false
+  [params.editURL]
+    enable = false
+
+[[menu.main]]
+  identifier = "docs"
+  name = "Documentation"
+  pageRef = "/docs"
+  weight = 1
+[[menu.main]]
+  identifier = "guide"
+  name = "User Guide"
+  pageRef = "/docs/guide"
+  weight = 2
+[[menu.main]]
+  identifier = "api"
+  name = "API Reference"
+  pageRef = "/docs/api"
+  weight = 3
+[[menu.main]]
+  name = "Search"
+  weight = 4
+  [menu.main.params]
+    type = "search"
+[[menu.main]]
+  name = "GitHub"
+  weight = 5
+  url = "https://github.com/org-runink/runi"
+  [menu.main.params]
+    icon = "github"
+
+[[menu.sidebar]]
+  identifier = "more"
+  name = "More"
+  weight = 1
+  [menu.sidebar.params]
+    type = "separator"
+[[menu.sidebar]]
+  identifier = "pkgsite"
+  name = "pkg.go.dev reference"
+  url = "https://pkg.go.dev/github.com/org-runink/runi"
+  weight = 2
+[[menu.sidebar]]
+  identifier = "repo"
+  name = "Source on GitHub"
+  url = "https://github.com/org-runink/runi"
+  weight = 3
+[[menu.sidebar]]
+  identifier = "changelog"
+  name = "Changelog"
+  url = "https://github.com/org-runink/runi/blob/main/CHANGELOG.md"
+  weight = 4

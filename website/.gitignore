@@ -1,0 +1,4 @@
+# Hugo build byproducts. The site builds to a scratch directory, never into the repo.
+/public/
+/resources/
+.hugo_build.lock
