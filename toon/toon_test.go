@@ -169,8 +169,17 @@ func TestEscapes(t *testing.T) {
 func TestStructuralErrorsAreRefused(t *testing.T) {
 	cases := []struct{ name, in string }{
 		{"row with the wrong column count", "p[2]{a,b}:\n  1,2,3\n"},
+		// This one stays and is the sharpest case in the list: "a: 1" is a
+		// SCALAR, so a deeper line after it has no block to belong to at any
+		// unit. Inferring the unit cannot rescue it.
 		{"indent that matches no block", "a: 1\n    b: 2\n"},
-		{"odd indent", "a:\n   b: 2\n"},
+		// "odd indent" ("a:\n   b: 2\n") was here, on the grounds that three
+		// spaces is not two. This list is for documents that "cannot be read
+		// two ways without inventing an answer", and that one can only be
+		// read as b nested under a -- its unit is three. The rule conflated
+		// "not the usual unit" with "ambiguous". Decoded now in
+		// TestIndentUnitIsTheDocumentsOwn; genuinely inconsistent documents
+		// are refused by TestAnInconsistentIndentIsRefused.
 		{"tab indent", "a:\n\tb: 2\n"},
 		{"unterminated string", "s: \"never closed\n"},
 		{"no colon", "just some prose\n"},
