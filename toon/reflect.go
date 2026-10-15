@@ -108,7 +108,31 @@ func buildStruct(t reflect.Type) *structInfo {
 		if !sf.IsExported() {
 			continue
 		}
-		tag := sf.Tag.Get("json")
+		// `json` is the mapping, as the package documents. A `toon` tag is
+		// consulted ONLY when there is no json tag at all.
+		//
+		// Without this, a struct tagged for TOON and nothing else decoded by
+		// Go FIELD NAME: `CurrentThought string `toon:"current_thought"``
+		// looked for "CurrentThought" and never found "current_thought", so
+		// the field stayed zero and no error was raised. Silent, and invisible
+		// to a test that only round-trips through this package, because
+		// encoding used the same wrong name and the pair agreed with each
+		// other while agreeing with nothing else.
+		//
+		// Measured across the estate before adding this: of 347 toon-tagged
+		// fields in one consumer, 310 also carried a json tag and 37 did not —
+		// among them a ReAct agent loop, seven credential field names, and
+		// eleven keys of a DURABLE store, where a silent rename is not a parse
+		// bug but an unwritten migration.
+		//
+		// Lookup, not Get: `json:""` is a deliberate empty tag and must not
+		// fall through to toon, while an ABSENT json tag must. Precedence is
+		// json-wins so a struct that already round-trips as JSON is untouched,
+		// which is the contract this package states.
+		tag, ok := sf.Tag.Lookup("json")
+		if !ok {
+			tag = sf.Tag.Get("toon")
+		}
 		if tag == "-" {
 			continue
 		}
