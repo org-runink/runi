@@ -179,7 +179,29 @@ func scan(text string) ([]line, error) {
 			}
 		}
 	}
-	var out []line
+	// A document's indentation unit is its own. Two passes: measure every
+	// line, then turn distances into depths once the document has been seen
+	// whole and its unit is known.
+	//
+	// Fixing the unit at two spaces refused documents that were never
+	// ambiguous -- a model indenting consistently with three or four spaces
+	// describes exactly one tree, and reading it requires inventing nothing.
+	// Models do not reliably emit two spaces, so those documents are ordinary
+	// rather than exotic.
+	//
+	// What is NOT relaxed is consistency. The unit is taken from the first
+	// step the document actually makes and every later indent must be a
+	// multiple of it; a document that indents 4 and then 6 is refused, as it
+	// was before. Note this is deliberately not the greatest common divisor
+	// of the indents: a GCD is by construction divided by all of them, so it
+	// can never refuse anything, and "any indent" is a different promise from
+	// "any CONSISTENT indent".
+	type scanned struct {
+		n      int
+		spaces int
+		text   string
+	}
+	var got []scanned
 	for i := start; i < end; i++ {
 		s := raw[i]
 		if strings.TrimSpace(s) == "" {
@@ -189,13 +211,45 @@ func scan(text string) ([]line, error) {
 		// line indented with a tab has no leading spaces at all, so looking
 		// only at those found nothing and let the tab through as depth 0.
 		if lead := len(s) - len(strings.TrimLeft(s, " \t\v\f")); strings.ContainsAny(s[:lead], "\t\v\f") {
-			return nil, &SyntaxError{i + 1, "tab in indentation; TOON indents with two spaces"}
+			return nil, &SyntaxError{i + 1, "tab in indentation; TOON indents with spaces, not tabs"}
 		}
 		spaces := len(s) - len(strings.TrimLeft(s, " "))
-		if spaces%indentWidth != 0 {
-			return nil, &SyntaxError{i + 1, fmt.Sprintf("indent of %d spaces is not a multiple of %d", spaces, indentWidth)}
+		got = append(got, scanned{n: i + 1, spaces: spaces, text: strings.TrimRight(s[spaces:], " ")})
+	}
+
+	// A block indented as a whole -- over-indented inside a fence, or pasted
+	// under a bullet -- carries the same offset on every line including the
+	// first, and describes the tree the unshifted text would. The shallowest
+	// line sets the zero and the rest are measured from it.
+	base := 0
+	for i, g := range got {
+		if i == 0 || g.spaces < base {
+			base = g.spaces
 		}
-		out = append(out, line{n: i + 1, indent: spaces / indentWidth, text: strings.TrimRight(s[spaces:], " ")})
+	}
+
+	// The unit is the first step the document makes. Everything after is
+	// measured against it rather than re-deriving it, which is what makes an
+	// inconsistent document detectable at all.
+	unit := 0
+	for _, g := range got {
+		if d := g.spaces - base; d > 0 {
+			unit = d
+			break
+		}
+	}
+	if unit == 0 {
+		// Nothing is indented, so there is no unit to find and none needed.
+		unit = indentWidth
+	}
+
+	out := make([]line, 0, len(got))
+	for _, g := range got {
+		d := g.spaces - base
+		if d%unit != 0 {
+			return nil, &SyntaxError{g.n, fmt.Sprintf("indent of %d spaces is not a multiple of this document's %d", d, unit)}
+		}
+		out = append(out, line{n: g.n, indent: d / unit, text: g.text})
 	}
 	return out, nil
 }
