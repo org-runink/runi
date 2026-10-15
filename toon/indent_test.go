@@ -46,9 +46,18 @@ func TestIndentUnitIsTheDocumentsOwn(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Parse: %v", err)
 		}
-		items, ok := got.(map[string]any)["items"].([]any)
+		// Parse returns a root array as a bare slice. Accept the mapping
+		// form too rather than pinning the shape here: this test is about
+		// the SHIFT being normalised, and asserting the container as well
+		// would make it fail for an unrelated reason if that ever changed.
+		items, ok := got.([]any)
+		if !ok {
+			if m, isMap := got.(map[string]any); isMap {
+				items, ok = m["items"].([]any)
+			}
+		}
 		if !ok || len(items) != 2 {
-			t.Fatalf("got %#v, want a two-item root array", got)
+			t.Fatalf("got %#v (%T), want a two-item root array", got, got)
 		}
 	})
 }
