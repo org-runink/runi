@@ -138,3 +138,41 @@ func TestATabIsStillRefused(t *testing.T) {
 		t.Errorf("got %T, want *SyntaxError", err)
 	}
 }
+
+// A LEVEL SKIP IS STILL REFUSED once the unit is established.
+//
+// These replace the three cases that left the refusal lists when the scanner
+// began taking the unit from the document ("value block indented two levels",
+// "array body indented two levels", "odd indent"). Those were two levels only
+// if a level was fixed at two spaces, and each of their documents made a
+// single step — so under unit inference they are one level and legal.
+//
+// What they USED to prove still needs proving, and it is the property the
+// widening claims to keep: a child more than one level below its parent has
+// nothing to belong to. The difference is that the unit must now be
+// established by an EARLIER step before a later line can skip it. Here the
+// first step is two spaces, so the four-space jump that follows is two levels
+// and has no block at the level in between.
+//
+// Without these the two guards in value.go are unreachable from the test
+// suite, which is how this package's 100% floor caught the omission.
+func TestALevelSkipIsRefusedOnceTheUnitIsSet(t *testing.T) {
+	for _, tc := range []struct{ name, doc string }{
+		// value block: `w` lands two levels under `z`
+		{"value block skips a level", "x:\n  y: 1\nz:\n      w: 2\n"},
+		// array body: the dash item lands two levels under its header
+		{"array body skips a level", "x:\n  y: 1\nz[1]:\n      - a\n"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var got any
+			err := Decode(tc.doc, &got)
+			if err == nil {
+				t.Fatalf("accepted %q; a child two levels below its parent has no block to belong to", tc.doc)
+			}
+			var se *SyntaxError
+			if !errors.As(err, &se) {
+				t.Errorf("got %T (%v), want *SyntaxError", err, err)
+			}
+		})
+	}
+}
