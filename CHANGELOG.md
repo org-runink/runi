@@ -71,6 +71,24 @@ everything else is v0.9.2 unchanged.
 - **`arimax.Model.Forecast` on a model not built by `Fit`** returns
   `ErrNotFitted` instead of zeros.
 - **`avro.WriteOCF` allocates once per call instead of four times.**
+- **`toon` reads a document's own indentation unit.** A level was fixed at two
+  spaces, so a document indented with three or four was refused although it
+  describes exactly one tree. The shallowest line now sets the zero — so a
+  block indented as a whole reads as the tree its unshifted text would — and
+  the unit is the first step the document makes. CONSISTENCY IS NOT RELAXED:
+  every later indent must be a multiple of that unit, so a document that steps
+  4 and then 6 is still refused, and a child more than one level below its
+  parent still has nothing to belong to. Tabs are still refused; this widens
+  how many SPACES make a level, not what counts as indentation.
+- **`toon` honours a `toon` struct tag when there is no `json` tag.** Field
+  mapping follows `encoding/json`, and a struct tagged only for TOON therefore
+  decoded by Go FIELD NAME: `CurrentThought string `toon:"current_thought"``
+  looked for "CurrentThought", never found "current_thought", left the field
+  zero and raised no error. Such a struct now maps by its declared name.
+  `json` still wins when both tags are present, and an empty `json:""` is
+  deliberate and does not fall through, so anything that already round-trips
+  as JSON is untouched. **This changes what such a struct decodes to** — from
+  nothing to the intended value — which is a correction, but it is a change.
 
 ### Documentation
 
