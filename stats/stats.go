@@ -485,6 +485,28 @@ func Median(x []float64) float64 { return Quantile(x, 0.5) }
 // values cannot move, unlike the standard deviation.
 func IQR(x []float64) float64 { return Quantile(x, 0.75) - Quantile(x, 0.25) }
 
+// MAD is the median absolute deviation: the median of |xᵢ − median(x)|.
+//
+// It measures spread the way [IQR] does — a few extreme values cannot move it
+// — but it is the one a repeated benchmark wants, because it answers "how far
+// is a typical run from the typical run" in the data's own units. Divided by
+// the median it gives a scale-free figure comparable across suites, which is
+// what a kernel-comparison report prints.
+//
+// NaN propagates, exactly as it does through [Median]: a column with an
+// unknown value in it has an unknown median, and therefore unknown deviations
+// from it. Drop or impute the NaNs first if you want a figure anyway — this
+// package will not decide that for you. An empty input is NaN for the same
+// reason.
+func MAD(x []float64) float64 {
+	med := Median(x)
+	dev := make([]float64, len(x))
+	for i, v := range x {
+		dev[i] = math.Abs(v - med)
+	}
+	return Median(dev)
+}
+
 // Summary is what [Describe] reports: the shape of a column at a glance.
 type Summary struct {
 	N      int

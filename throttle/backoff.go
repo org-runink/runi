@@ -21,6 +21,18 @@ const (
 	// prev being the previous delay (base before the first), so each delay
 	// lies in [base, cap].
 	DecorrelatedJitter
+	// NoJitter returns the exponential delay itself, min(cap, base·2ⁿ), with
+	// no randomness at all.
+	//
+	// Jitter is the right default: it stops a fleet that failed together from
+	// retrying together. But a caller that is ONE client talking to ONE
+	// endpoint has no herd to spread, and may have documented or tested its
+	// retry schedule — an installer that says "retrying in 30s" and then waits
+	// a random fraction of 30s has made its own message untrue. For those,
+	// randomness is a behaviour change with nothing bought.
+	//
+	// NoJitter needs no random source: NewBackoff accepts a nil src with it.
+	NoJitter
 )
 
 // String is "full" or "decorrelated".
@@ -30,6 +42,8 @@ func (j Jitter) String() string {
 		return "full"
 	case DecorrelatedJitter:
 		return "decorrelated"
+	case NoJitter:
+		return "none"
 	}
 	return "Jitter(" + strconv.Itoa(int(j)) + ")"
 }
@@ -90,8 +104,8 @@ type Backoff struct {
 // NewBackoff returns a backoff of the given jitter with 0 < base ≤ cap,
 // drawing from src, which must not be nil.
 func NewBackoff(j Jitter, base, cap time.Duration, src rand.Source) (Backoff, error) {
-	if j > DecorrelatedJitter {
-		return Backoff{}, invalid("jitter", j, "FullJitter or DecorrelatedJitter")
+	if j > NoJitter {
+		return Backoff{}, invalid("jitter", j, "FullJitter, DecorrelatedJitter or NoJitter")
 	}
 	if base <= 0 {
 		return Backoff{}, invalid("base", base, "> 0")
@@ -99,7 +113,7 @@ func NewBackoff(j Jitter, base, cap time.Duration, src rand.Source) (Backoff, er
 	if cap < base {
 		return Backoff{}, invalid("cap", cap, ">= base")
 	}
-	if src == nil {
+	if src == nil && j != NoJitter {
 		return Backoff{}, invalid("src", src, "a random source")
 	}
 	return Backoff{jitter: j, base: base, cap: cap, src: src, prev: base}, nil
@@ -109,7 +123,9 @@ func NewBackoff(j Jitter, base, cap time.Duration, src rand.Source) (Backoff, er
 // not allocate.
 func (b *Backoff) Next() time.Duration {
 	var d time.Duration
-	if b.jitter == DecorrelatedJitter {
+	if b.jitter == NoJitter {
+		d = b.Ceiling()
+	} else if b.jitter == DecorrelatedJitter {
 		hi := time.Duration(math.MaxInt64)
 		if b.prev <= hi/3 {
 			hi = 3 * b.prev

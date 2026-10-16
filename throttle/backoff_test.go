@@ -16,7 +16,7 @@ func TestNewBackoffInvalid(t *testing.T) {
 		base, cap time.Duration
 		src       rand.Source
 	}{
-		{2, 1, 1, src}, {FullJitter, 0, 1, src}, {FullJitter, -1, 1, src},
+		{NoJitter + 1, 1, 1, src}, {FullJitter, 0, 1, src}, {FullJitter, -1, 1, src},
 		{DecorrelatedJitter, 2, 1, src}, {FullJitter, 1, 1, nil},
 	} {
 		if _, err := NewBackoff(c.j, c.base, c.cap, c.src); !errors.Is(err, ErrInvalid) {
@@ -26,7 +26,7 @@ func TestNewBackoffInvalid(t *testing.T) {
 }
 
 func TestJitterString(t *testing.T) {
-	for j, want := range map[Jitter]string{FullJitter: "full", DecorrelatedJitter: "decorrelated", 9: "Jitter(9)"} {
+	for j, want := range map[Jitter]string{FullJitter: "full", DecorrelatedJitter: "decorrelated", NoJitter: "none", 9: "Jitter(9)"} {
 		if j.String() != want {
 			t.Errorf("%d.String() = %q, want %q", j, j.String(), want)
 		}
