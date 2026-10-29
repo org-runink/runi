@@ -1,6 +1,6 @@
 ---
 title: "runi/rate"
-weight: 14
+weight: 15
 ---
 
 ```go

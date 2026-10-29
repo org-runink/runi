@@ -10,7 +10,7 @@
 
 <p align="center">
   <em>Goggles to see what is coming. A harness to work close to the metal.<br>
-  Seventeen small Go packages, zero dependencies, every claim measured.</em>
+  Eighteen small Go packages, zero dependencies, every claim measured.</em>
 </p>
 
 <p align="center">
@@ -25,7 +25,7 @@
   <a href="https://goreportcard.com/report/github.com/org-runink/runi"><img src="https://goreportcard.com/badge/github.com/org-runink/runi" alt="Go Report Card"></a>
   <img src="https://img.shields.io/badge/go-1.24%20%7C%201.25%20%7C%201.26-00ADD8" alt="Go 1.24 | 1.25 | 1.26">
   <img src="https://img.shields.io/badge/dependencies-0-success" alt="zero dependencies">
-  <img src="https://img.shields.io/badge/packages-17-informational" alt="seventeen packages">
+  <img src="https://img.shields.io/badge/packages-18-informational" alt="eighteen packages">
   <img src="https://img.shields.io/badge/coverage-100%25-brightgreen" alt="coverage">
   <img src="https://img.shields.io/badge/license-BSD--3--Clause-blue" alt="BSD-3-Clause">
 </p>
@@ -55,6 +55,7 @@ go get github.com/org-runink/runi
 | [`runi/budget`](#runibudget--one-deadline-shared-honestly) | Split one deadline between the steps of a request, and say which ran out | **100%** |
 | [`runi/chain`](#runichain--records-nobody-can-quietly-rewrite) | Seal records so an edit, a move or a swap shows, and say which | **100%** |
 | [`runi/toon`](#runitoon--the-table-format-models-write) | Read and write TOON, the token-frugal table format | **100%** |
+| [`runi/toml`](#runitoml--configuration-files-read-strictly) | Read TOML configuration files into structs, strictly when it matters | **100%** |
 | [`runi/drift`](#runidrift--when-a-series-changes-regime) | Notice the moment a stream of readings changes regime, as each one arrives | **100%** |
 | [`runi/rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Turn cumulative counters into per-interval rates, across wraps and resets | **100%** |
 | [`runi/tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Keep subtree sums and maxima of a hierarchy current, and name the heaviest parts | **100%** |
@@ -99,6 +100,7 @@ you are still the one doing the work.
 | 🫀 **the heartbeat** | [`rate`](#runirate--counters-into-rates-across-wraps-and-resets) | Know how fast things are going between two glances, even when the counter rolls over |
 | 🗺️ **the map** | [`tree`](#runitree--which-part-of-the-hierarchy-is-responsible) | Know which part of the flock, and which stray within it, is pulling everyone off course |
 | 🐾 **the paws** | [`sustain`](#runisustain--decisions-that-do-not-flap) | Plant the feet and turn only when the ground has really changed, not at every gust |
+| 📜 **the orders** | [`toml`](#runitoml--configuration-files-read-strictly) | Read the instructions it was sent out with, exactly as written, and refuse a garbled line |
 | 🦮 **the leash** | [`throttle`](#runithrottle--acting-less-often-than-you-are-asked-to) | Hold back from chasing every sheep at once, and stop chasing one that keeps getting away |
 
 <p align="center">
@@ -693,6 +695,67 @@ in the package:
 - `Parse` keeps an integer as an `int64` and so is exact; `Decode` into `any`
   gives every number as a `float64`, as `encoding/json` would, which rounds
   past 2⁵³. Decode into a typed destination, or use `Parse`.
+
+
+## `runi/toml` — configuration files, read strictly
+
+Model sampling settings, connection manifests, project configuration and
+`+++` frontmatter are written in TOML. This reads TOML v1.0.0 into the same Go
+values `encoding/json` would fill, with no dependency to vendor for it.
+
+```go
+err := toml.Unmarshal(data, &cfg)       // structs, maps, slices, time.Time
+doc, err := toml.Parse(data)            // map[string]any
+
+d := toml.NewDecoder(f)                 // strict: a misspelt key is an error,
+d.DisallowUnknownFields()               // not a setting left at its default
+err = d.Decode(&cfg)
+```
+
+```
+toml: servers[1].port: expected integer, got string (line 4:1)
+toml: prot: unknown key: the struct has no field for it (line 2:1)
+```
+
+**Errors say where, and in terms of the document.** Every problem is a
+`*toml.Error` with the key path, array indexes included, and the line and
+column, so the message points at the line to fix. In strict mode every unknown
+key is reported, not only the first. Redefining a key or a table, appending
+with `[[ ]]` to an array written inline, and adding to an inline table after it
+closes are refused as the specification requires, and the message names where
+the first definition was.
+
+**Nothing is converted behind your back.** Keys match `toml:"name"` tags, or
+the Go field name, case-sensitively, as TOML keys are. An integer that does not
+fit its field, or that a float field cannot hold exactly, is an error rather than
+a wrap or a rounding. A local date-time has no zone; it fills a `time.Time` in UTC,
+or keeps its meaning in `toml.LocalDateTime`.
+
+**Conformance.** The test vectors were written for this package from the v1.0.0
+specification, section by section: every key, string, number, date-time, array
+and table form, valid and invalid, with the exact line and column each error
+must report. A fuzz target holds that no input panics and every error points
+inside the document.
+
+On an eight-model sampling configuration (4.4 KB: arrays of tables, multi-line
+prompts, inline tables), median of five runs on a 22-thread x86-64 machine with
+Go 1.26:
+
+| Reading `testdata/models.toml` | Time | Allocations |
+|---|---:|---:|
+| `toml.Parse` into a map | 82 µs | 703 |
+| `toml.Unmarshal` into structs | 84 µs | 647 |
+| `encoding/json` into the same structs, from the same data as JSON | 63 µs | 134 |
+
+It is about a third slower than `encoding/json` reading the same configuration,
+and allocates about five times as often; a file read once at start-up does not
+notice either. The allocation counts are pinned by a test.
+
+What it does **not** do: write TOML; read a stream incrementally (a `Decoder`
+reads all of its reader first); expand environment variables or include other
+files, which belong to the application; or accept the later v1.1 additions —
+times without seconds, multi-line inline tables, `\e` and `\x` escapes. A leap
+second (`:60`) is an error, because `time.Time` cannot hold it as written.
 
 
 ## `runi/drift` — when a series changes regime
@@ -1536,7 +1599,7 @@ not a defect, which is its own small lesson about tests that measure the host.
 
 ### On the coverage figure
 
-**Every one of the seventeen packages is at 100% of statements**, and the floor is
+**Every one of the eighteen packages is at 100% of statements**, and the floor is
 enforced per package so a strong one cannot pay for a weak one.
 
 The number is not the point, and on its own it is close to meaningless — the six
@@ -1566,7 +1629,7 @@ continuously verified in CI, not asserted once.
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
 | **Supply-chain posture** | OpenSSF Scorecard, published weekly |
-| **Test coverage** | **100%** of statements in every one of the seventeen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
+| **Test coverage** | **100%** of statements in every one of the eighteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
@@ -1612,7 +1675,7 @@ needed — no logo, case study or quote will be asked for.
 | `lazy/lazy.go` | `Value`, `Start`, `Get`, `Map`, `Then`, `All` | `Get` honours ctx without cancelling the shared evaluation |
 
 ```bash
-go test ./...                                 # all seventeen packages
+go test ./...                                 # all eighteen packages
 go test -race ./...                           # several packages are concurrent
 go test -bench . -benchmem -benchtime=1s ./...
 gofmt -l . && go vet ./...                    # must both be silent

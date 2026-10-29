@@ -21,7 +21,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 OUT  = os.path.join(HERE, "content/docs/api")
 PKGS = ["stats","arimax","season","bm25","salvage","avro","barn","memo","lazy",
-        "budget","chain","toon","drift","rate","tree","sustain","throttle"]
+        "budget","chain","toon","toml","drift","rate","tree","sustain","throttle"]
 BLURB = {
  "stats":"Describe, split and scale a column, and test whether a relationship is real",
  "arimax":"Forecast a series using the things that drive it",
@@ -37,6 +37,7 @@ BLURB = {
  "bm25":"Rank documents by the words they share",
  "salvage":"Get JSON out of a language model's reply, without guessing",
  "toon":"A compact object notation that costs fewer tokens than JSON",
+ "toml":"Read TOML v1.0.0 configuration files into Go values, strictly if asked",
  "avro":"Read and write Avro and Avro OCF files",
  "barn":"Append-only versioned tables with time travel, no database",
  "chain":"Tamper-evident chaining and verification of records",

@@ -87,6 +87,7 @@ and to reference values within a relative error of 1e-9.
 - `func` [FitMinMax](#fitminmax)
 - `func` [FitStandardiser](#fitstandardiser)
 - `func` [IQR](#iqr)
+- `func` [MAD](#mad)
 - `func` [Max](#max)
 - `func` [Mean](#mean)
 - `func` [Median](#median)
@@ -374,6 +375,28 @@ func IQR(x []float64) float64
 
 IQR is the interquartile range, Q3 − Q1: a spread measure that a few extreme
 values cannot move, unlike the standard deviation.
+
+<small>Defined in <code>stats/stats.go</code>.</small>
+
+### MAD
+
+```go
+func MAD(x []float64) float64
+```
+
+MAD is the median absolute deviation: the median of |xᵢ − median(x)|.
+
+It measures spread the way [IQR] does — a few extreme values cannot move it
+— but it is the one a repeated benchmark wants, because it answers "how far
+is a typical run from the typical run" in the data's own units. Divided by
+the median it gives a scale-free figure comparable across suites, which is
+what a kernel-comparison report prints.
+
+NaN propagates, exactly as it does through [Median]: a column with an
+unknown value in it has an unknown median, and therefore unknown deviations
+from it. Drop or impute the NaNs first if you want a figure anyway — this
+package will not decide that for you. An empty input is NaN for the same
+reason.
 
 <small>Defined in <code>stats/stats.go</code>.</small>
 

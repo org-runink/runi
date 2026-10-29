@@ -8,7 +8,7 @@ layout: hextra-home
 {{< /hextra/hero-badge >}}
 
 {{< hextra/hero-headline >}}
-  Seventeen small Go packages&nbsp;<br class="sm:hx-block hx-hidden" />for data and AI work
+  Eighteen small Go packages&nbsp;<br class="sm:hx-block hx-hidden" />for data and AI work
 {{< /hextra/hero-headline >}}
 
 {{< hextra/hero-subtitle >}}

@@ -76,7 +76,7 @@ disableKinds = ["taxonomy", "term", "rss"]
     endLevel = 3
 
 [params]
-  description = "Seventeen small Go packages for data and AI work, with zero dependencies."
+  description = "Eighteen small Go packages for data and AI work, with zero dependencies."
   [params.navbar.logo]
     path = "brand/runi-logo.jpg"
     width = 28

@@ -1,6 +1,6 @@
 ---
 title: "runi/throttle"
-weight: 17
+weight: 18
 ---
 
 ```go

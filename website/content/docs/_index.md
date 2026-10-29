@@ -3,12 +3,12 @@ title: "Documentation"
 weight: 1
 ---
 
-`runi` is a set of seventeen small Go packages for the data and AI work that shows up
+`runi` is a set of eighteen small Go packages for the data and AI work that shows up
 inside a running service: describing a column, ranking documents, getting JSON out of a
 language model, forecasting a series, versioning a table, deciding whether a signal has
 genuinely changed.
 
-Each package is independent. Take one, take all seventeen, or copy a file out — the
+Each package is independent. Take one, take all eighteen, or copy a file out — the
 licence permits it and nothing depends on anything else.
 
 {{< cards >}}
