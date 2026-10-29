@@ -3,6 +3,7 @@
 package toml
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -431,6 +432,23 @@ func TestErrorText(t *testing.T) {
 	e.Path = "servers[0].port"
 	if got := e.Error(); got != "toml: servers[0].port: bad (line 3:7)" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// A Parse result re-encoded as JSON writes each date and time kind as its
+// TOML text, not as the fields of a Go struct.
+func TestParseResultAsJSON(t *testing.T) {
+	doc, err := Parse([]byte("odt = 2026-10-29T08:15:00Z\nldt = 2026-10-29T08:15:00.5\nld = 2026-10-29\nlt = 08:15:00\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	const want = `{"ld":"2026-10-29","ldt":"2026-10-29T08:15:00.5","lt":"08:15:00","odt":"2026-10-29T08:15:00Z"}`
+	if string(got) != want {
+		t.Fatalf("got  %s\nwant %s", got, want)
 	}
 }
 

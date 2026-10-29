@@ -85,9 +85,12 @@ to the decoded values, where the rules are yours.
 - `const` [ErrInvalid](#errinvalid)
 - `method` [Error.Error](#errorerror)
 - `method` [LocalDate.In](#localdatein)
+- `method` [LocalDate.MarshalText](#localdatemarshaltext)
 - `method` [LocalDate.String](#localdatestring)
 - `method` [LocalDateTime.In](#localdatetimein)
+- `method` [LocalDateTime.MarshalText](#localdatetimemarshaltext)
 - `method` [LocalDateTime.String](#localdatetimestring)
+- `method` [LocalTime.MarshalText](#localtimemarshaltext)
 - `method` [LocalTime.String](#localtimestring)
 - `func` [NewDecoder](#newdecoder)
 - `func` [Parse](#parse)
@@ -216,6 +219,17 @@ In returns midnight at the start of the date in loc.
 
 <small>Defined in <code>toml/datetime.go</code>.</small>
 
+### LocalDate.MarshalText
+
+```go
+func (d LocalDate) MarshalText() ([]byte, error)
+```
+
+MarshalText returns the date as String does, so encoding/json and other
+text encoders write 1979-05-27 rather than the struct's fields.
+
+<small>Defined in <code>toml/datetime.go</code>.</small>
+
 ### LocalDate.String
 
 ```go
@@ -236,6 +250,16 @@ In returns the moment the wall-clock time names in loc.
 
 <small>Defined in <code>toml/datetime.go</code>.</small>
 
+### LocalDateTime.MarshalText
+
+```go
+func (dt LocalDateTime) MarshalText() ([]byte, error)
+```
+
+MarshalText returns the date-time as String does.
+
+<small>Defined in <code>toml/datetime.go</code>.</small>
+
 ### LocalDateTime.String
 
 ```go
@@ -243,6 +267,16 @@ func (dt LocalDateTime) String() string
 ```
 
 String writes the date-time as TOML does, with a T between the parts.
+
+<small>Defined in <code>toml/datetime.go</code>.</small>
+
+### LocalTime.MarshalText
+
+```go
+func (t LocalTime) MarshalText() ([]byte, error)
+```
+
+MarshalText returns the time as String does.
 
 <small>Defined in <code>toml/datetime.go</code>.</small>
 
