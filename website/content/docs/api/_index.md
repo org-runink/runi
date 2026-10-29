@@ -23,6 +23,7 @@ see [pkg.go.dev](https://pkg.go.dev/github.com/org-runink/runi).
 | [`runi/budget`](budget/) | One deadline for a whole request, split across its phases |
 | [`runi/chain`](chain/) | Tamper-evident chaining and verification of records |
 | [`runi/toon`](toon/) | A compact object notation that costs fewer tokens than JSON |
+| [`runi/toml`](toml/) | Read TOML v1.0.0 configuration files into Go values, strictly if asked |
 | [`runi/drift`](drift/) | Streaming change detection over a moving baseline |
 | [`runi/rate`](rate/) | Cumulative counters into per-interval rates, across wraps and resets |
 | [`runi/tree`](tree/) | Subtree sums and maxima of a hierarchy, kept current |

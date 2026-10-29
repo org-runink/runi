@@ -100,7 +100,7 @@ jobs:
           set -eu
           miss=0
           for d in arimax avro barn bm25 budget chain drift lazy memo rate \
-                   salvage season stats sustain throttle toon tree; do
+                   salvage season stats sustain throttle toml toon tree; do
             test -s "$RUNNER_TEMP/public/docs/api/$d/index.html" \
               || { echo "::error::no API page built for runi/$d"; miss=1; }
           done

@@ -3,7 +3,7 @@ title: "Choosing a package"
 weight: 2
 ---
 
-Seventeen packages, indexed by the job rather than the name.
+Eighteen packages, indexed by the job rather than the name.
 
 ## Understanding a column of numbers
 
@@ -49,6 +49,12 @@ only one you take.
 | Read and write Avro and Avro OCF | [`avro`](../../api/avro/) |
 | Keep append-only versioned tables with time travel, no database | [`barn`](../../api/barn/) |
 | Make records nobody can quietly rewrite | [`chain`](../../api/chain/) |
+
+## Reading configuration
+
+| You want to | Package |
+|---|---|
+| Read a TOML file into structs, and refuse keys nobody reads | [`toml`](../../api/toml/) |
 
 ## Making a call cheaper
 

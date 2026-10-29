@@ -8,6 +8,18 @@ in the README, under [Compatibility](README.md#compatibility).
 Releases before the first entry here are listed only as tags; their commit
 messages are the record.
 
+## Unreleased
+
+### Added
+
+- **`runi/toml`, a TOML v1.0.0 reader.** `Unmarshal`, `Decode` and `Parse`
+  read a document into structs (`toml:"name"` tags, case-sensitive), maps,
+  slices, the basic types and `time.Time`, with `LocalDate`, `LocalTime` and
+  `LocalDateTime` for the zone-less kinds. A `Decoder` with
+  `DisallowUnknownFields` refuses keys the destination has no field for,
+  reporting each one. Every error carries the key path, with array indexes,
+  and the line and column. Reading only; it does not write TOML.
+
 ## v1.0.0 — 2026-10-15
 
 The first stable release. From here on, within v1, the exported API of every

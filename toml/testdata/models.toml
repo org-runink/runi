@@ -1,0 +1,246 @@
+# Sampling configuration for the models an agent harness can route to.
+# One [[models]] entry per model; [models.sampling] holds the request
+# defaults, [models.limits] what the server will accept.
+
+version = 3
+updated = 2026-10-29T08:15:00Z
+
+[defaults]
+temperature = 0.7
+top_p = 0.95
+max_tokens = 1_024
+stream = true
+stop = ["</s>", "<|im_end|>"]
+retry = { attempts = 3, backoff_ms = 250, jitter = 0.2 }
+
+[[models]]
+name = "chat-small"
+id = 'local/chat-small-q4'
+tags = ["chat", "summarise"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.7
+top_p = 0.9
+top_k = 40
+min_p = 0.05
+repetition_penalty = 1.05
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 2048
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 8192
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "chat-large"
+id = 'local/chat-large-q4'
+tags = ["chat", "plan", "review"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.6
+top_p = 0.95
+top_k = 50
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 4096
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 32768
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "coder"
+id = 'local/coder-q5'
+tags = ["code", "patch"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.2
+top_p = 0.95
+top_k = 20
+min_p = 0.1
+repetition_penalty = 1.1
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 8192
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 65536
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "reasoner"
+id = 'local/reasoner-q4'
+tags = ["plan", "math"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.6
+top_p = 0.95
+top_k = 20
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 16384
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 131072
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "vision"
+id = 'local/vision-q4'
+tags = ["ocr", "caption"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.4
+top_p = 0.9
+top_k = 30
+min_p = 0.05
+repetition_penalty = 1.05
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 1024
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 16384
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "judge"
+id = 'local/judge-q8'
+tags = ["grade"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.0
+top_p = 1.0
+top_k = 1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 256
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 8192
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "embed"
+id = 'local/embed-f16'
+tags = ["embed"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.0
+top_p = 1.0
+top_k = 1
+min_p = 0.0
+repetition_penalty = 1.0
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 0
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 8192
+max_batch = 8
+timeout_s = 1.5e2
+
+[[models]]
+name = "draft"
+id = 'local/draft-q4'
+tags = ["speculate"]
+enabled = true
+system = """
+You are a careful assistant. Answer in plain language, \
+and say so when you do not know."""
+
+[models.sampling]
+temperature = 0.8
+top_p = 0.9
+top_k = 64
+min_p = 0.02
+repetition_penalty = 1.15
+presence_penalty = 0.0
+frequency_penalty = 0.0
+max_tokens = 512
+seed = 0x5EED
+stop = [
+  "</s>",
+  "<|im_end|>",   # chat-template terminator
+]
+
+[models.limits]
+context = 4096
+max_batch = 8
+timeout_s = 1.5e2
