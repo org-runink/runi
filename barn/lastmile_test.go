@@ -114,9 +114,10 @@ func TestChangesSinceSkipsOlderVersions(t *testing.T) {
 	}
 }
 
-// Objects in the log directory whose names this package did not write are not
-// versions. Treating one as version 0, or failing on it, would make a stray
-// file able to break the table.
+// Objects in the log or checkpoint directory whose names this package did not
+// write are not versions. Treating one as version 0, or failing on it, would
+// make a stray file able to break the table. The log is never listed; the
+// _checkpoint/ listing (no hint at two commits) is what must skip them.
 func TestListVersionsIgnoresForeignNames(t *testing.T) {
 	ctx := context.Background()
 	ms, ck := twoCommits(t)
@@ -125,6 +126,10 @@ func TestListVersionsIgnoresForeignNames(t *testing.T) {
 		"tables/acme/orders/_log/not-a-version-at-all.json",
 		"tables/acme/orders/_log/000000000000000000xx.json", // right length, not a number
 		"tables/acme/orders/_log/README.txt",
+		"tables/acme/orders/_checkpoint/00000000000000000000.avro",
+		"tables/acme/orders/_checkpoint/not-a-version-at-all.avro",
+		"tables/acme/orders/_checkpoint/000000000000000000xx.avro",
+		"tables/acme/orders/_checkpoint/README.txt",
 	} {
 		if err := ms.PutIfAbsent(ctx, k, []byte(`{"version":0}`)); err != nil {
 			t.Fatalf("seed %s: %v", k, err)
