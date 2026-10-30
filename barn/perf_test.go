@@ -181,8 +181,13 @@ func TestAColdReadReplaysOnlyPastTheCheckpoint(t *testing.T) {
 	if len(rows) != 25 {
 		t.Fatalf("scan returned %d rows, want 25", len(rows))
 	}
-	if n := cs.logRead.Load(); n != 5 {
-		t.Errorf("a cold read of a 25-commit table with a checkpoint at v20 read %d log entries, want 5", n)
+	// v21..v25, then the miss at v26 that marks the head and the gap check at
+	// v27. Those two reads replace what used to be a LIST of all 25 entries.
+	if n := cs.logRead.Load(); n != 7 {
+		t.Errorf("a cold read of a 25-commit table with a checkpoint at v20 read %d log objects, want 7 (5 replayed, the miss, the gap check)", n)
+	}
+	if n := cs.listed.Load(); n != 0 {
+		t.Errorf("a cold read with a checkpoint hint listed the store %d times, want 0", n)
 	}
 }
 
