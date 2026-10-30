@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"maps"
+	"math"
 	"math/rand/v2"
 	"sort"
 	"strconv"
@@ -198,38 +199,38 @@ func (t *Table) readLog(ctx context.Context, v int64) (*logEntry, error) {
 
 // loadState returns the state at target (-1 = head).
 //
-// Head discovery is a LIST of _log/; the base it replays from is the newest of
-// (this handle's cached head, the checkpoint the _last hint names — or, for time
-// travel, the newest checkpoint ≤ target). Log entries are never deleted, so a
-// missing or stale hint or checkpoint only costs replay, never correctness.
+// The base it replays from is the newest of (this handle's cached head, the
+// checkpoint the _last hint names — or, for time travel, the newest checkpoint
+// ≤ target). It then reads the log forward from there, and the first version
+// that is not there is one past the head.
+//
+// THE LOG IS NEVER LISTED. Head discovery used to be a LIST of _log/, and log
+// entries are never deleted, so every read of a table paid for every commit the
+// table had ever had: thousands of keys, several pages, on each Get and Scan.
+// Reading forward costs what the replay already cost plus one miss. It is
+// correct because versions are dense (each commit is the atomic create of
+// head+1) and a returned PutIfAbsent is readable by a later Get. A missing or
+// stale hint or checkpoint still only costs replay, never correctness.
+//
+// A gap — an entry missing while a later one exists — can only come from
+// something outside this package deleting log objects. The version after the
+// first miss is read too, so a gap is reported as ErrCorrupt instead of being
+// read as the head, where the next commit would fill it and splice old history
+// onto new.
 func (t *Table) loadState(ctx context.Context, target int64) (*state, error) {
-	logs, err := t.listVersions(ctx, "_log/", ".json")
-	if err != nil {
-		return nil, err
-	}
-	var head int64
-	if n := len(logs); n > 0 {
-		head = logs[n-1]
-	}
-	if int64(len(logs)) != head {
-		return nil, fmt.Errorf("%w: %d log entries but head is v%d (gap in the log)", ErrCorrupt, len(logs), head)
-	}
-	atHead := target < 0 || target == head
-	if target < 0 {
-		target = head
-	}
-	if target > head {
-		return nil, fmt.Errorf("%w: v%d (head is v%d)", ErrNoVersion, target, head)
-	}
-
+	atHead := target < 0
 	base := emptyState()
 	t.mu.Lock()
-	if c := t.cache; c != nil && c.version <= target {
+	if c := t.cache; c != nil && (atHead || c.version <= target) {
 		base = c
 	}
 	t.mu.Unlock()
 
-	cp, err := t.bestCheckpoint(ctx, target, atHead)
+	cpTarget := target
+	if atHead {
+		cpTarget = math.MaxInt64
+	}
+	cp, err := t.bestCheckpoint(ctx, cpTarget, atHead)
 	if err != nil {
 		return nil, err
 	}
@@ -249,8 +250,17 @@ func (t *Table) loadState(ctx context.Context, target int64) (*state, error) {
 	}
 
 	s := base
-	for v := s.version + 1; v <= target; v++ {
+	for v := s.version + 1; atHead || v <= target; v++ {
 		e, err := t.readLog(ctx, v)
+		if errors.Is(err, ErrNotFound) {
+			if gerr := t.noLaterLog(ctx, v); gerr != nil {
+				return nil, gerr
+			}
+			if atHead {
+				break
+			}
+			return nil, fmt.Errorf("%w: v%d (head is v%d)", ErrNoVersion, target, v-1)
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -265,6 +275,20 @@ func (t *Table) loadState(ctx context.Context, target int64) (*state, error) {
 		t.remember(s)
 	}
 	return s, nil
+}
+
+// noLaterLog checks that v, which is not in the log, is past the head rather
+// than a hole in it: v+1 must not be there either.
+func (t *Table) noLaterLog(ctx context.Context, v int64) error {
+	_, err := t.readObject(ctx, t.logKey(v+1))
+	switch {
+	case errors.Is(err, ErrNotFound):
+		return nil
+	case err != nil:
+		return fmt.Errorf("barn: read log v%d: %w", v+1, err)
+	default:
+		return fmt.Errorf("%w: log v%d is missing but v%d exists (gap in the log)", ErrCorrupt, v, v+1)
+	}
 }
 
 func (t *Table) remember(s *state) {
