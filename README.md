@@ -1624,15 +1624,16 @@ continuously verified in CI, not asserted once.
 | | |
 |---|---|
 | **Dependencies** | **Zero.** `go.mod` declares none, and CI **fails the build** if a `require` line or a non-stdlib package appears in the dependency graph. There is no transitive tree to audit. |
-| **Platforms tested** | Linux, macOS, Windows × Go 1.24, 1.25 — six combinations, every push |
-| **Concurrency** | `go test -race` on all platforms, every push |
+| **Platforms tested** | Linux × Go 1.24, 1.25, 1.26, every push. macOS and Windows are no longer tested in CI (the project's own runners are Linux) |
+| **Concurrency** | `go test -race` on Linux, every push |
 | **Vulnerability scanning** | `govulncheck` **daily** and on every push |
 | **Static analysis** | CodeQL weekly, `security-and-quality` query set |
-| **Supply-chain posture** | OpenSSF Scorecard, published weekly |
+| **Supply-chain posture** | OpenSSF Scorecard weekly, uploaded to code scanning (no longer published: its API accepts only GitHub-hosted runs) |
 | **Test coverage** | **100%** of statements in every one of the eighteen packages (the `benchmarks/` commands are excluded; they are programs, not library code). Floors are enforced **per package** at 100, so a strong package cannot pay for a weak one |
 | **Formatting** | `gofmt` clean, enforced |
 | **Benchmarks** | compiled and executed in CI so published figures stay reproducible |
 | **Scheduled runs** | CI runs weekly even without commits, so a green badge means "passes on current toolchains", not "passed once" |
+| **CI runners** | The project's own `[self-hosted, public-ci]` runners, never GitHub-hosted. Jobs run only for pushes to this repository's branches and pull requests from them; a fork's pull request starts no job, so a maintainer pushes reviewed fork changes to a branch here to test them |
 | **Licence** | BSD-3-Clause, single licence, no exceptions |
 | **Vulnerability disclosure** | [SECURITY.md](SECURITY.md) — private advisory, 5-day acknowledgement |
 
