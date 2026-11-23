@@ -1,0 +1,50 @@
+{{- /*
+SPDX-FileCopyrightText: 2026 Runink
+SPDX-License-Identifier: BSD-3-Clause
+
+  Overrides the vendored Hextra partial at the same path. Hugo resolves a
+  project-level layout before the one a module (the _vendor/imfing/hextra
+  mount) supplies, so this file replaces it without touching _vendor/.
+
+  WHY THIS ISN'T THE STOCK HEXTRA PARTIAL: that one calls gtag('config', …)
+  unconditionally in <head> on every production build — no consent check at
+  all. These docs are public and EU-visited, so shipping that as-is measures
+  a visitor before they have said yes. It is the same gate the Runink River docs
+  use (their partial at this path, ported with its own storage key): Consent
+  Mode v2 defaults every signal to denied before the tag configures itself,
+  and only an explicit "Allow Counting" click in the banner (custom/footer.html)
+  grants analytics_storage. A stored grant from an
+  earlier visit is re-applied here since the banner does not render twice.
+
+  Only analytics_storage is ever granted. This site carries no advertising, so
+  the ad_* signals stay denied permanently.
+*/ -}}
+{{- with site.Config.Services.GoogleAnalytics.ID }}
+<script>
+  window.dataLayer = window.dataLayer || [];
+  function gtag(){dataLayer.push(arguments);}
+
+  gtag('consent', 'default', {
+    'ad_storage': 'denied',
+    'ad_user_data': 'denied',
+    'ad_personalization': 'denied',
+    'analytics_storage': 'denied',
+    'functionality_storage': 'granted',
+    'security_storage': 'granted',
+    'wait_for_update': 500
+  });
+
+  try {
+    if (window.localStorage && localStorage.getItem('runiCookieConsent') === 'accepted') {
+      gtag('consent', 'update', { 'analytics_storage': 'granted' });
+    }
+  } catch (e) {
+    /* Private windows and blocked site data throw on access; denied is
+       already the correct outcome, so there is nothing else to do. */
+  }
+
+  gtag('js', new Date());
+  gtag('config', '{{ . }}');
+</script>
+<script async src="https://www.googletagmanager.com/gtag/js?id={{ . }}"></script>
+{{- end }}

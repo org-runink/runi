@@ -3,6 +3,7 @@
 | File | Size | Use |
 |---|---|---|
 | `runi-logo.jpg` | 1024×1024 | the mark — Arlo in the Runi rig; README header at 220px, favicon source, avatars |
+| `runi-logo-128.png` | 128×128 | a transparent circular crop of `runi-logo.jpg` for small sizes: the docs navbar; the docs favicons are cut the same way |
 | `runi-wallpaper.jpg` | 1376×768 | Arlo at work in the rain; landscape banner, wallpaper, slide and social backgrounds |
 
 **Arlo** is Runink's Australian Shepherd. **Runi** is the rig he wears — the AR

@@ -1,0 +1,12 @@
+{{- /*
+SPDX-FileCopyrightText: 2026 Runink
+SPDX-License-Identifier: BSD-3-Clause
+
+Replaces Hextra's favicon set with the Runi badge. The icons in static/ are a circular,
+transparent crop of assets/runi-logo.jpg (ImageMagick); they override Hextra's files of
+the same names. No web manifest: the docs are not an installable app.
+*/ -}}
+<link rel="icon" href="{{ "favicon.ico" | relURL }}" sizes="16x16 32x32 48x48" />
+<link rel="icon" href="{{ "favicon-32x32.png" | relURL }}" type="image/png" sizes="32x32" />
+<link rel="icon" href="{{ "favicon-16x16.png" | relURL }}" type="image/png" sizes="16x16" />
+<link rel="apple-touch-icon" href="{{ "apple-touch-icon.png" | relURL }}" sizes="180x180" />

@@ -7,9 +7,8 @@
 # FlexSearch, which Hextra would otherwise fetch from a CDN at build time, is vendored
 # under assets/lib/ for the same reason.
 #
-# Must build with Hugo 0.147.3 -- the version core-docs-publish.yml pins -- and newer.
-# That workflow clones this repo, looks for website/hugo.toml, and skips the product
-# entirely if it is absent, which is why this file existing is the whole gate.
+# Must build with Hugo 0.147.3 (the version .github/workflows/docs.yml pins) and newer;
+# the docs.runink.org publisher builds this directory.
 
 baseURL = "https://docs.runink.org/runi/"
 title = "Runi"
@@ -20,9 +19,11 @@ disableKinds = ["taxonomy", "term", "rss"]
 # No enableGitInfo: the CI checkout is shallow, and a wrong "last updated" date is
 # worse than none.
 
-# Consent-gated (Consent Mode v2, denied by default). Same GA4 property as runink.org
-# and the other docs sites -- one property across every public Runink surface, owner
-# decision 2026-09-28.
+# Consent-gated (Consent Mode v2, denied by default): see
+# layouts/_partials/components/analytics/google-analytics.html and
+# layouts/_partials/custom/footer.html (the consent banner), overrides of Hextra's
+# vendored partials at those paths. Same GA4 property as runink.org and the other docs
+# sites (one property across every public Runink surface).
 [services]
   [services.googleAnalytics]
     id = 'G-SEECKDWZNJ'
@@ -60,6 +61,10 @@ disableKinds = ["taxonomy", "term", "rss"]
   [[module.mounts]]
     source = "../assets/runi-logo.jpg"
     target = "static/brand/runi-logo.jpg"
+  # The navbar uses a 128 px transparent circular crop of it (11 KB instead of 290 KB).
+  [[module.mounts]]
+    source = "../assets/runi-logo-128.png"
+    target = "static/brand/runi-logo-128.png"
 
 [outputs]
   home = ["html"]
@@ -78,7 +83,7 @@ disableKinds = ["taxonomy", "term", "rss"]
 [params]
   description = "Eighteen small Go packages for data and AI work, with zero dependencies."
   [params.navbar.logo]
-    path = "brand/runi-logo.jpg"
+    path = "brand/runi-logo-128.png"
     width = 28
     height = 28
   [params.footer]
@@ -103,13 +108,18 @@ disableKinds = ["taxonomy", "term", "rss"]
   pageRef = "/docs/api"
   weight = 3
 [[menu.main]]
-  name = "Search"
+  identifier = "develop"
+  name = "Developer Guide"
+  pageRef = "/docs/develop"
   weight = 4
+[[menu.main]]
+  name = "Search"
+  weight = 5
   [menu.main.params]
     type = "search"
 [[menu.main]]
   name = "GitHub"
-  weight = 5
+  weight = 6
   url = "https://github.com/org-runink/runi"
   [menu.main.params]
     icon = "github"
