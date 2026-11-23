@@ -8,12 +8,15 @@ inside a running service: describing a column, ranking documents, getting JSON o
 language model, forecasting a series, versioning a table, deciding whether a signal has
 genuinely changed.
 
-Each package is independent. Take one, take all eighteen, or copy a file out — the
-licence permits it and nothing depends on anything else.
+Each package stands on its own. Take one, take all eighteen, or copy a file out — the
+licence permits it, nothing needs more than the standard library, and only `barn` uses
+another package of the set (`avro`).
 
 {{< cards >}}
   {{< card link="guide/" title="User Guide" subtitle="Install it, choose a package, and understand where it is meant to run." >}}
-  {{< card link="api/" title="API Reference" subtitle="Every exported symbol, generated from the source." >}}
+  {{< card link="guide/where-it-runs/" title="Running it in production" subtitle="Services, pods and inference harnesses; versioning and upgrades in Compatibility." >}}
+  {{< card link="api/" title="API Reference" subtitle="Every exported symbol and its configuration, generated from the source." >}}
+  {{< card link="develop/" title="Developer Guide" subtitle="Build and test, the rules a change keeps, adding a package." >}}
 {{< /cards >}}
 
 ## The three promises

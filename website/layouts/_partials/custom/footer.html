@@ -1,0 +1,95 @@
+{{- /*
+SPDX-FileCopyrightText: 2026 Runink
+SPDX-License-Identifier: BSD-3-Clause
+
+  This is deliberately custom/footer.html, not custom/banner.html.
+  custom/banner.html only renders at all when site.Params.banner is set
+  (layouts/_partials/banner.html: `{{- if site.Params.banner }}`), and even
+  then Hextra wraps it in its OWN dismiss button, whose JS just hides the
+  banner on click and remembers that in localStorage under a key derived from
+  the banner text — it records nothing about consent, so a visitor could
+  dismiss it without ever answering, and it would then never come back. This
+  hook is called unconditionally, with no such wrapper, so it is the right
+  place for a banner whose own two buttons are the only way to dismiss it.
+
+  Rendered as a fixed bottom bar via inline styles (not the site's `hx:*`
+  Tailwind classes) so it looks the same regardless of Hextra's own CSS
+  build, and floats over the footer content it's nested next to rather than
+  depending on that content's layout.
+
+  Gates the same google-analytics.html partial override in ../components/
+  analytics/ — see that file for why the gate exists (Consent Mode v2, denied
+  by default). Only fires when a measurement ID is actually configured.
+*/ -}}
+{{- if site.Config.Services.GoogleAnalytics.ID }}
+<div id="runi-consent-banner" style="display:none;position:fixed;left:0;right:0;bottom:0;z-index:9999;background:#1a1a1a;color:#d4d4d4;padding:1rem 1.25rem;font:14px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem;border-top:1px solid #333;">
+  <p style="margin:0;max-width:48rem;flex:1 1 20rem;">
+    We use cookies to count visits to this documentation. There is no advertising here,
+    so nothing is used to target you. Nothing is counted until you choose
+    "Allow Counting". See the
+    <a href="https://runink.org/privacy/" style="color:#fff;text-decoration:underline;">Runink privacy policy</a>
+    for details.
+  </p>
+  <div style="display:flex;gap:0.75rem;flex:0 0 auto;">
+    <button id="runi-reject-cookies" style="padding:0.5rem 1rem;font-size:14px;border:1px solid #555;background:transparent;color:#d4d4d4;border-radius:0.4rem;cursor:pointer;">
+      Reject Non-Essential
+    </button>
+    <button id="runi-accept-cookies" style="padding:0.5rem 1rem;font-size:14px;border:none;background:#3b82f6;color:#fff;border-radius:0.4rem;cursor:pointer;">
+      Allow Counting
+    </button>
+  </div>
+</div>
+<script>
+(function() {
+  var banner = document.getElementById('runi-consent-banner');
+  if (!banner) return;
+  var ts = null;
+  try { ts = localStorage.getItem('runiCookieConsentTimestamp'); } catch (e) {}
+  var ttl = 180 * 24 * 60 * 60 * 1000; // 180 days
+  var now = Date.now();
+
+  if (!ts || (now - parseInt(ts, 10) >= ttl)) {
+    banner.style.display = 'flex';
+    try {
+      localStorage.removeItem('runiCookieConsent');
+      localStorage.removeItem('runiCookieConsentTimestamp');
+    } catch (e) {}
+  }
+
+  document.addEventListener('DOMContentLoaded', function() {
+    var acceptBtn = document.getElementById('runi-accept-cookies');
+    var rejectBtn = document.getElementById('runi-reject-cookies');
+    if (!acceptBtn || !rejectBtn) return;
+
+    // gtag is defined in <head> by the google-analytics.html override, but
+    // only when a measurement ID is configured — guard the call rather than
+    // throwing on a build that has none. A grant has to replay the page_view:
+    // the initial load already sent a cookieless ping (gcs=G100) before any
+    // decision existed, and gtag never re-sends one on its own.
+    function setConsent(granted) {
+      if (typeof gtag !== 'function') return;
+      gtag('consent', 'update', { 'analytics_storage': granted ? 'granted' : 'denied' });
+      if (granted) gtag('event', 'page_view');
+    }
+
+    acceptBtn.addEventListener('click', function() {
+      try {
+        localStorage.setItem('runiCookieConsent', 'accepted');
+        localStorage.setItem('runiCookieConsentTimestamp', Date.now().toString());
+      } catch (e) {}
+      setConsent(true);
+      banner.style.display = 'none';
+    });
+
+    rejectBtn.addEventListener('click', function() {
+      try {
+        localStorage.setItem('runiCookieConsent', 'rejected');
+        localStorage.setItem('runiCookieConsentTimestamp', Date.now().toString());
+      } catch (e) {}
+      setConsent(false);
+      banner.style.display = 'none';
+    });
+  });
+})();
+</script>
+{{- end }}
