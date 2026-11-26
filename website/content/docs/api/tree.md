@@ -35,6 +35,7 @@ Which to use:
 
 Bytes per directory, and the directories that hold most of them:
 
+```go
 t := tree.New[string]()
 t.AddRoot("/")
 t.Add("/var", "/")
@@ -42,6 +43,7 @@ t.Add("/var/log", "/var")
 t.Set("/var/log", 7e9)
 fmt.Println(t.Sum("/")) // 7e+09
 top := t.TopK("/", 3, tree.BySum, nil)
+```
 
 A Tree is a forest: it may have several roots. A root is its own parent
 wherever a parent is named: Parent of a root returns the root, Add(id, id)
