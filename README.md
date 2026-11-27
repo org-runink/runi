@@ -1842,7 +1842,7 @@ follow the water; the mascot and his rig do not.
 | | |
 |---|---|
 | **Runink River** | the operating system |
-| **Runink TIDE** | the console and control plane |
+| **Runink TIDDE** (Trusted Intelligence for Developer & Data Experience) | the console and control plane |
 | **runi** | the Go packages both of them are built on |
 | **Arlo** | Runink's Australian Shepherd, and the one doing the work |
 | **Runi** | the goggles and harness Arlo wears — the gear these packages are named for |
