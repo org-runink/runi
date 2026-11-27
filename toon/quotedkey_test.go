@@ -51,6 +51,39 @@ func TestQuotedKeyMalformedRefused(t *testing.T) {
 	}
 }
 
+// A quoted tabular field name is unquoted like a key, so a bad escape in
+// one is a syntax error naming the field list, not a field called `"a\q"`.
+func TestQuotedFieldNameMalformedRefused(t *testing.T) {
+	in := `items[1]{"a\q"}:` + "\n  1\n"
+	_, err := Parse(in)
+	if err == nil {
+		t.Fatalf("Parse(%q) succeeded, want a syntax error", in)
+	}
+	if !strings.Contains(err.Error(), "quoted field name") {
+		t.Errorf("Parse(%q) error = %q, want it to name the quoted field name", in, err)
+	}
+}
+
+// closingQuote finds the quote that closes s[0]'s string, stepping over
+// escaped quotes, and says -1 when the string never closes.
+func TestClosingQuote(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want int
+	}{
+		{`"ab"`, 3},
+		{`"a\"b"`, 5},
+		{`"a\\"`, 4},
+		{`"ab`, -1},
+		{`"a\"`, -1},
+		{`"`, -1},
+	} {
+		if got := closingQuote(c.in); got != c.want {
+			t.Errorf("closingQuote(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
+
 // Whatever the encoder writes for a map key reads back as the same key.
 func FuzzQuotedKeyRoundTrip(f *testing.F) {
 	for _, s := range []string{"1", "a:b", `a"b`, "a[1]", "x y", "plain", `\`, "tab\there"} {

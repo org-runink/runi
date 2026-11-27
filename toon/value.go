@@ -46,9 +46,11 @@ func parseKey(l line) (keySpec, string, error) {
 	// quotes stayed in the key.
 	name, decl := lhs, ""
 	if strings.HasPrefix(lhs, `"`) {
-		// topLevelColon only ends the key at a colon outside quotes, so a key that starts with a quote has its
-		// closing quote here (an unclosed one never reaches this point: it is "expected a key followed by ':'").
-		// Were that ever untrue, closingQuote returns -1 and unquote refuses the empty text: an error either way.
+		// topLevelColon only returns a colon outside quotes, so a key that
+		// opens with a quote always closes before it: an unclosed one has
+		// no top-level colon and was refused above ("expected a key").
+		// Were that ever to change, end is -1, lhs[:0] is "", and unquote
+		// still refuses it ("string is not closed").
 		end := closingQuote(lhs)
 		s, err := unquote(lhs[:end+1])
 		if err != nil {
