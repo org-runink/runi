@@ -40,39 +40,84 @@ func parseKey(l line) (keySpec, string, error) {
 		return keySpec{}, "", &SyntaxError{l.n, "expected a key followed by ':'"}
 	}
 	lhs, rest := t[:colon], strings.TrimPrefix(t[colon+1:], " ")
-	k := keySpec{name: lhs, delim: ','}
-	if open := strings.IndexByte(lhs, '['); open >= 0 {
-		close := strings.IndexByte(lhs[open:], ']')
+	// The name is either bare (up to any '[') or a quoted string, which
+	// decodes to its unquoted, unescaped text: `"1": x` is the key 1, and a
+	// quoted key may hold a colon, a bracket or a space. Before v1.1.2 the
+	// quotes stayed in the key.
+	name, decl := lhs, ""
+	if strings.HasPrefix(lhs, `"`) {
+		end := closingQuote(lhs)
+		if end < 0 {
+			return keySpec{}, "", &SyntaxError{l.n, "quoted key is not closed"}
+		}
+		s, err := unquote(lhs[:end+1])
+		if err != nil {
+			return keySpec{}, "", &SyntaxError{l.n, "quoted key: " + err.Error()}
+		}
+		name, decl = s, lhs[end+1:]
+		if decl != "" && decl[0] != '[' {
+			return keySpec{}, "", &SyntaxError{l.n, "unexpected text after a quoted key"}
+		}
+	} else if open := strings.IndexByte(lhs, '['); open >= 0 {
+		name, decl = lhs[:open], lhs[open:]
+	}
+	k := keySpec{name: name, delim: ','}
+	if decl != "" {
+		close := strings.IndexByte(decl, ']')
 		if close < 0 {
 			return keySpec{}, "", &SyntaxError{l.n, "array declaration is missing ']'"}
 		}
-		close += open
-		count := lhs[open+1 : close]
+		count := decl[1:close]
 		if c := count; c != "" && (c[len(c)-1] == '\t' || c[len(c)-1] == '|') {
 			k.delim, count = c[len(c)-1], c[:len(c)-1]
 		}
 		n, err := strconv.Atoi(count)
 		if err != nil || n < 0 {
-			return keySpec{}, "", &SyntaxError{l.n, fmt.Sprintf("array length %q is not a count", lhs[open+1:close])}
+			return keySpec{}, "", &SyntaxError{l.n, fmt.Sprintf("array length %q is not a count", decl[1:close])}
 		}
-		k.name, k.isArray, k.count = lhs[:open], true, n
-		if tail := lhs[close+1:]; tail != "" {
+		k.isArray, k.count = true, n
+		if tail := decl[close+1:]; tail != "" {
 			if !strings.HasPrefix(tail, "{") || !strings.HasSuffix(tail, "}") {
 				return keySpec{}, "", &SyntaxError{l.n, "expected field names in {…} after the array length"}
 			}
 			// Split of an empty string yields one empty element, so counting
 			// the slice would always say "one field". The names themselves
-			// are what must be non-empty.
-			for _, f := range strings.Split(tail[1:len(tail)-1], string(k.delim)) {
-				name := strings.TrimSpace(f)
-				if name == "" {
+			// are what must be non-empty. A field name may be quoted like a
+			// key, and decodes the same way.
+			for _, f := range splitValues(nil, tail[1:len(tail)-1], k.delim) {
+				fname := strings.TrimSpace(f)
+				if strings.HasPrefix(fname, `"`) {
+					s, err := unquote(fname)
+					if err != nil {
+						return keySpec{}, "", &SyntaxError{l.n, "quoted field name: " + err.Error()}
+					}
+					fname = s
+				}
+				if fname == "" {
 					return keySpec{}, "", &SyntaxError{l.n, "tabular array has an empty field name"}
 				}
-				k.fields = append(k.fields, name)
+				k.fields = append(k.fields, fname)
 			}
 		}
 	}
 	return k, rest, nil
+}
+
+// closingQuote returns the index of the '"' that closes the quoted string
+// starting at s[0], honouring backslash escapes, or -1 when it never closes.
+func closingQuote(s string) int {
+	esc := false
+	for i := 1; i < len(s); i++ {
+		switch {
+		case esc:
+			esc = false
+		case s[i] == '\\':
+			esc = true
+		case s[i] == '"':
+			return i
+		}
+	}
+	return -1
 }
 
 // topLevelColon finds the ':' that ends the key, ignoring any inside quotes
