@@ -16,7 +16,7 @@ the only coordination primitive is the object store's atomic create
 
 # Layout
 
-Everything for one table lives under `tables/<tenant>/<table>/`:
+Everything for one table lives under tables/<tenant>/<table>/:
 
 data/<hex>.avro            immutable Avro OCF rows (key, op put|del, ts, payload, ver, ord)
 _log/%020d.json            commit N: {version, parent, ts, writer, add, remove, op}
@@ -51,7 +51,7 @@ them back, so whether objects are sealed at rest is entirely a property of
 the implementation you supply.
 
 If you do seal them, bind the ciphertext to the object's KEY. Every key here
-already encodes tenant, table and path (`tables/<tenant>/<table>/<path>`), so
+already encodes tenant, table and path (tables/<tenant>/<table>/<path>), so
 binding to the key gives you the property worth having: a data file copied
 into another tenant's or table's prefix fails to open rather than being
 served as that table's data. A scheme that binds only to the bucket, or to
@@ -194,7 +194,7 @@ GCS, MinIO, a filesystem, or anything else with an atomic create; it is an
 interface so tests can inject faults too (a crash between the data write and
 the log write, say). [MemStore] is a complete in-memory implementation.
 
-Keys are slash-separated paths of the form `tables/<tenant>/<table>/<path>`.
+Keys are slash-separated paths of the form tables/<tenant>/<table>/<path>.
 A Store treats them as opaque strings: it must not clean, case-fold or
 otherwise rewrite them, and a key read back from List must be accepted
 unchanged by Get and Delete.
@@ -306,7 +306,7 @@ the zero value is an empty store ready to use.
 func Open(st Store, tenant, table string, opts ...Option) (*Table, error)
 ```
 
-Open returns a handle on `tables/<tenant>/<table>/`. It does no I/O: an empty
+Open returns a handle on tables/<tenant>/<table>/. It does no I/O: an empty
 table is simply one with no log entries yet (version 0).
 
 <small>Defined in <code>barn/barn.go</code>.</small>
