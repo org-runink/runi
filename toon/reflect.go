@@ -129,14 +129,23 @@ func buildStruct(t reflect.Type) *structInfo {
 		// fall through to toon, while an ABSENT json tag must. Precedence is
 		// json-wins so a struct that already round-trips as JSON is untouched,
 		// which is the contract this package states.
-		tag, ok := sf.Tag.Lookup("json")
-		if !ok {
+		tag, fromJSON := sf.Tag.Lookup("json")
+		if !fromJSON {
 			tag = sf.Tag.Get("toon")
 		}
 		if tag == "-" {
 			continue
 		}
 		name, opts, _ := strings.Cut(tag, ",")
+		if name != "" && !validTag(name) && fromJSON {
+			// A json tag name outside encoding/json's v1 grammar (a backslash,
+			// a quote) is read differently by the toolchain's encoding/json:
+			// Go 1.27 builds it on the v2 core by default, which does not fall
+			// back to the Go field name the way v1 did. Guessing either rule
+			// here would disagree with encoding/json on some toolchain, so the
+			// type is handed to encoding/json, whose answer is the contract.
+			return declined
+		}
 		if !validTag(name) {
 			name = sf.Name
 		}
