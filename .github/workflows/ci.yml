@@ -16,7 +16,6 @@ permissions:
 jobs:
   test:
     name: test (go ${{ matrix.go }})
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, public-ci]
     strategy:
       fail-fast: false
@@ -47,7 +46,6 @@ jobs:
 
   quality:
     name: format, coverage, dependencies
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, public-ci]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
@@ -126,7 +124,6 @@ jobs:
 
   benchmarks:
     name: benchmarks run
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, public-ci]
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2

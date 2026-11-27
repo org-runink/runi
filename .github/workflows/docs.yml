@@ -37,7 +37,6 @@ env:
 jobs:
   build:
     name: build (Hugo 0.147.3)
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, public-ci]
     timeout-minutes: 10
     steps:
