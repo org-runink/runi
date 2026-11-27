@@ -71,3 +71,33 @@ func FuzzQuotedKeyRoundTrip(f *testing.F) {
 		}
 	})
 }
+
+// A quoted field name in a tabular header goes through the same unquoting as a quoted key, and a bad
+// escape in it is a syntax error, not a field named with stray backslashes.
+func TestQuotedFieldNameMalformedRefused(t *testing.T) {
+	_, err := Parse(`"t"[1]{"bad\q",b}:` + "\n  1,2\n")
+	if err == nil {
+		t.Fatal("a tabular header with a bad escape in a quoted field name must be a syntax error")
+	}
+	if !strings.Contains(err.Error(), "quoted field name") {
+		t.Errorf("error = %v, want it to name the quoted field name", err)
+	}
+}
+
+// closingQuote reports -1 for a string whose quote never closes, and the index of the unescaped
+// closing quote otherwise; an escaped quote does not close it.
+func TestClosingQuote(t *testing.T) {
+	for _, c := range []struct {
+		in   string
+		want int
+	}{
+		{`"open`, -1},
+		{`"a\"`, -1},
+		{`"a"`, 2},
+		{`"a\"b"`, 5},
+	} {
+		if got := closingQuote(c.in); got != c.want {
+			t.Errorf("closingQuote(%q) = %d, want %d", c.in, got, c.want)
+		}
+	}
+}
