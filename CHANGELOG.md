@@ -10,6 +10,16 @@ messages are the record.
 
 ## Unreleased
 
+### Fixed (for v1.1.2)
+
+- **`runi/toon`: a quoted key decodes to its unquoted text.** `"1": x` used
+  to read back as a key that still held the quote characters; it now reads
+  as the key `1`, with the JSON escapes applied, as the TOON spec says. A
+  quoted key may hold a colon, a bracket or a space, and a quoted tabular
+  field name decodes the same way. A quoted key that never closes, or has
+  text between its closing quote and the colon or `[`, is a syntax error.
+  No exported API changes, and unquoted keys read exactly as before.
+
 ### Added
 
 - **`runi/toml`, a TOML v1.0.0 reader.** `Unmarshal`, `Decode` and `Parse`
