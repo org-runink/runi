@@ -39,4 +39,4 @@ artwork.
 |---|---|---|
 | All Go source, tests, docs | BSD-3-Clause | yes, freely |
 | Arlo, the Runi rig, the Runink logo, the wallpaper | all rights reserved | no |
-| "Runink", "Runink River", "Runink TIDE" | trademarks of Runink | no |
+| "Runink", "Runink River", "Runink TIDDE" | trademarks of Runink | no |
