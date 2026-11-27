@@ -81,7 +81,9 @@ jobs:
             floor=${FLOOR[$pkg]}
             printf '%-8s %6s%%  (floor %s%%)\n' "$pkg" "$got" "$floor"
             awk -v g="$got" -v f="$floor" 'BEGIN{ exit (g+0 < f+0) }' || {
-              echo "::error::$pkg coverage ${got}% is below its ${floor}% floor"; fail=1; }
+              echo "::error::$pkg coverage ${got}% is below its ${floor}% floor"; fail=1
+              echo "uncovered blocks in $pkg (file:start,end statements count):"
+              awk 'NR > 1 && $NF == 0' "cov-$pkg.out"; }
           done
           exit "$fail"
       - name: ZERO dependencies is a guarantee, not an aspiration
