@@ -10,7 +10,11 @@ messages are the record.
 
 ## Unreleased
 
-### Fixed (for v1.1.2)
+Nothing yet.
+
+## v1.1.2 — 2026-11-27
+
+### Fixed
 
 - **`runi/toon`: a quoted key decodes to its unquoted text.** `"1": x` used
   to read back as a key that still held the quote characters; it now reads
@@ -19,6 +23,23 @@ messages are the record.
   field name decodes the same way. A quoted key that never closes, or has
   text between its closing quote and the colon or `[`, is a syntax error.
   No exported API changes, and unquoted keys read exactly as before.
+- **`runi/toon`: a `json` tag name outside `encoding/json`'s grammar now
+  follows `encoding/json` on every toolchain.** Go 1.27 builds
+  `encoding/json` on its v2 core by default, which reads a tag name such as
+  `bad\name` differently from the v1 rule this package copied, so `Encode`
+  and `Decode` could disagree with a JSON round trip for such a field. A
+  struct with a `json` tag name `encoding/json` rejects is now handed to
+  `encoding/json`, whose answer is the contract. Valid tag names, `toon`
+  tags and untagged fields take the fast path exactly as before. No
+  exported API changes.
+
+## v1.1.1 — 2026-10-30
+
+### Fixed
+
+- **`runi/barn`: reads find the head without listing the log.**
+
+## v1.1.0 — 2026-10-29
 
 ### Added
 
