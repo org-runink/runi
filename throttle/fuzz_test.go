@@ -40,6 +40,10 @@ func FuzzThrottle(f *testing.F) {
 	f.Add(calls(0, 0, 0, 0), 2e9, uint8(255), int64(0), int64(0), uint64(3))
 	f.Add(calls(500, 500, -1, 500), 1e-9, uint8(9), int64(-1), int64(5), uint64(4))
 	f.Add(calls(), math.NaN(), uint8(0), int64(math.MaxInt64), int64(math.MaxInt64), uint64(5))
+	// NoJitter (small%4 == 2) with a valid base and cap, and an out-of-range
+	// jitter (small%4 == 3): NewBackoff accepts the first and refuses the second.
+	f.Add(calls(), 1.0, uint8(2), int64(time.Second), int64(10*time.Second), uint64(6))
+	f.Add(calls(), 1.0, uint8(3), int64(time.Second), int64(10*time.Second), uint64(7))
 	f.Fuzz(func(t *testing.T, b []byte, rate float64, small uint8, p, q int64, seed uint64) {
 		cs := fuzzCalls(b)
 		burst := int(small)
@@ -117,10 +121,10 @@ func FuzzThrottle(f *testing.F) {
 			}
 		}
 
-		// Backoff: base p, cap q, jitter from small.
-		j := Jitter(small % 3)
+		// Backoff: base p, cap q, jitter from small (3 is out of range).
+		j := Jitter(small % 4)
 		bo, err := NewBackoff(j, time.Duration(p), time.Duration(q), rand.NewPCG(seed, 1))
-		if (err == nil) != (j <= DecorrelatedJitter && p > 0 && q >= p) {
+		if (err == nil) != (j <= NoJitter && p > 0 && q >= p) {
 			t.Fatalf("NewBackoff(%v, %v, %v): %v", j, p, q, err)
 		}
 		if err == nil {

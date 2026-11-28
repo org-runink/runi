@@ -426,6 +426,12 @@ func (l *fastLayout) value(s string, i, idx int, acc *fastAcc) (int, bool) {
 		if !strings.HasPrefix(s[i:], "null") {
 			return 0, false
 		}
+		// A field the fast path cannot set may still act on null: encoding/json
+		// hands null to an UnmarshalJSON or UnmarshalText of its own. Only the
+		// general path can say what that does.
+		if idx >= 0 && l.fields[idx].kind == reflect.Invalid {
+			return 0, false
+		}
 		// null leaves the destination alone, and every field the object does
 		// not mention is zero already.
 		return i + 4, true
