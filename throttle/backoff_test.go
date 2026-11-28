@@ -65,6 +65,10 @@ func refBackoff(j Jitter, base, cap time.Duration, src rand.Source, n int) []tim
 	out := make([]time.Duration, n)
 	sleep := base
 	for i := range out {
+		if j == NoJitter {
+			out[i] = refCeiling(base, cap, i)
+			continue
+		}
 		if j == FullJitter {
 			hi := refCeiling(base, cap, i)
 			out[i] = time.Duration(refBelow(src, uint64(hi)+1))
