@@ -238,6 +238,9 @@ func TestFastPathDeclinesAndStillDecodes(t *testing.T) {
 		}
 		bothWays(t, `{"c":1,"s":"x"}`, func() any { return &holder{} })
 		bothWays(t, `{"s":"x"}`, func() any { return &holder{} })
+		// null is handed to UnmarshalJSON by encoding/json, so the fast path
+		// must not skip it for such a field.
+		bothWays(t, `{"c":null,"s":"x"}`, func() any { return &holder{} })
 	})
 	t.Run("too many fields", func(t *testing.T) {
 		bothWays(t, `{"F01":1}`, func() any { return &wide{} })
